@@ -3506,14 +3506,17 @@ function updateControls(state: UiState) {
     if (nextTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(nextTabId, nextTabUrl);
       if (cached) {
+        streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
         resetSummaryView({ preserveChat });
         panelCacheController.request(nextTabId, nextTabUrl, preserveChat);
       }
     } else {
+      streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
       resetSummaryView({ preserveChat });
@@ -3535,14 +3538,17 @@ function updateControls(state: UiState) {
     if (activeTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(activeTabId, nextTabUrl);
       if (cached) {
+        streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
         resetSummaryView({ preserveChat });
         panelCacheController.request(activeTabId, nextTabUrl, preserveChat);
       }
     } else {
+      streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
       resetSummaryView({ preserveChat });
