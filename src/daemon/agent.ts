@@ -7,6 +7,12 @@ import { resolveRunContextState } from "../run/run-context.js";
 import { resolveModelSelection } from "../run/run-models.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
 
+const YOUTUBE_RE = /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/watch|youtu\.be\/|youtube\.com\/live\/)/i;
+
+export function isYouTubeUrl(url: string): boolean {
+  return YOUTUBE_RE.test(url);
+}
+
 const AGENT_PROMPT_AUTOMATION = `You are Summarize Automation, not Claude.
 
 # Purpose
@@ -454,10 +460,12 @@ async function resolveAgentModel({
   env,
   pageContent,
   modelOverride,
+  pageUrl,
 }: {
   env: Record<string, string | undefined>;
   pageContent: string;
   modelOverride: string | null;
+  pageUrl?: string;
 }) {
   const {
     config,
@@ -550,7 +558,7 @@ async function resolveAgentModel({
     kind: "website",
     promptTokens: estimatedPromptTokens,
     desiredOutputTokens: maxOutputTokens,
-    requiresVideoUnderstanding: false,
+    requiresVideoUnderstanding: pageUrl ? isYouTubeUrl(pageUrl) : false,
     env: envForAuto,
     config: configForModelSelection,
     catalog: null,
@@ -572,6 +580,136 @@ async function resolveAgentModel({
   }
 
   throw new Error("No model available for agent");
+}
+
+/**
+ * Stream an agent chat using a raw OpenAI-compatible fetch with `video_url`
+ * content parts.  pi-ai has no video content type, so we build the payload
+ * ourselves.  Only used for non-automation chat (no tools) when the provider
+ * supports video (OpenRouter → Gemini).
+ */
+async function streamAgentWithVideo({
+  baseUrl,
+  modelId,
+  apiKey,
+  systemPrompt,
+  messages,
+  videoUrl,
+  maxOutputTokens,
+  signal,
+  onChunk,
+}: {
+  baseUrl: string;
+  modelId: string;
+  apiKey: string;
+  systemPrompt: string;
+  messages: Message[];
+  videoUrl: string;
+  maxOutputTokens: number;
+  signal?: AbortSignal;
+  onChunk: (text: string) => void;
+}): Promise<string> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+
+  // Convert pi-ai messages to OpenAI format, injecting video_url in the first
+  // user message.
+  const oaiMessages: Array<Record<string, unknown>> = [
+    { role: "system", content: systemPrompt },
+  ];
+  let videoInjected = false;
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const text = typeof msg.content === "string"
+        ? msg.content
+        : (msg.content as Array<{ type: string; text?: string }>)
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join("");
+      const contentParts: Array<Record<string, unknown>> = [
+        { type: "text", text },
+      ];
+      if (!videoInjected) {
+        contentParts.push({
+          type: "video_url",
+          video_url: { url: videoUrl },
+        });
+        videoInjected = true;
+      }
+      oaiMessages.push({ role: "user", content: contentParts });
+    } else if (msg.role === "assistant") {
+      const text = (msg.content as Array<{ type: string; text?: string }>)
+        .filter((p) => p.type === "text")
+        .map((p) => p.text ?? "")
+        .join("");
+      oaiMessages.push({ role: "assistant", content: text });
+    }
+    // toolResult messages are skipped — this path has no tools.
+  }
+
+  console.error(
+    `[summarize:agent-video] streamAgentWithVideo: model=${modelId}, videoUrl=${videoUrl}`,
+  );
+
+  const payload = {
+    model: modelId,
+    messages: oaiMessages,
+    max_tokens: maxOutputTokens,
+    stream: true,
+  };
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    throw new Error(`Agent video stream failed (${response.status}): ${bodyText.slice(0, 500)}`);
+  }
+  if (!response.body) throw new Error("Missing stream body");
+
+  // Parse SSE from OpenAI streaming response.
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue;
+      if (!trimmed.startsWith("data: ")) continue;
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") continue;
+
+      try {
+        const parsed = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+        };
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullText += delta;
+          onChunk(delta);
+        }
+      } catch {
+        // skip malformed JSON chunks
+      }
+    }
+  }
+
+  return fullText;
 }
 
 export async function streamAgentResponse({
@@ -617,8 +755,47 @@ export async function streamAgentResponse({
     env,
     pageContent,
     modelOverride,
+    pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+
+  // For YouTube videos on OpenRouter (Gemini) without automation tools,
+  // use a raw streaming fetch that includes the video_url multimodal part.
+  const useVideoPath =
+    isYouTubeUrl(pageUrl) &&
+    !automationEnabled &&
+    provider === "openrouter";
+
+  if (useVideoPath) {
+    console.error(
+      `[summarize:agent-video] using video multimodal path for ${pageUrl} with ${model.id}`,
+    );
+    const fullText = await streamAgentWithVideo({
+      baseUrl: model.baseUrl,
+      modelId: model.id,
+      apiKey,
+      systemPrompt,
+      messages: normalizedMessages,
+      videoUrl: pageUrl,
+      maxOutputTokens,
+      signal,
+      onChunk,
+    });
+
+    // Build a minimal AssistantMessage for the onAssistant callback.
+    const syntheticAssistant: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: fullText }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    onAssistant(syntheticAssistant);
+    return;
+  }
 
   const stream = streamSimple(
     model,
@@ -695,8 +872,41 @@ export async function completeAgentResponse({
     env,
     pageContent,
     modelOverride,
+    pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+
+  // For YouTube videos on OpenRouter (Gemini) without automation tools,
+  // use a raw fetch that includes the video_url multimodal part.
+  const useVideoPath =
+    isYouTubeUrl(pageUrl) &&
+    !automationEnabled &&
+    provider === "openrouter";
+
+  if (useVideoPath) {
+    let fullText = "";
+    await streamAgentWithVideo({
+      baseUrl: model.baseUrl,
+      modelId: model.id,
+      apiKey,
+      systemPrompt,
+      messages: normalizedMessages,
+      videoUrl: pageUrl,
+      maxOutputTokens,
+      onChunk: (text) => { fullText += text; },
+    });
+
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: fullText }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as AssistantMessage;
+  }
 
   const assistant = await completeSimple(
     model,
