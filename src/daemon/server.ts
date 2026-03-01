@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import http from "node:http";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import type { CacheState } from "../cache.js";
@@ -740,6 +741,7 @@ export async function runDaemonServer({
           magicCliOrder: obj.magicCliOrder,
         });
         const slidesSettings = resolveSlidesSettings({ env, request: obj });
+        const cookiesRaw = typeof obj.cookies === "string" ? obj.cookies : null;
         const diagnostics = parseDiagnostics(obj.diagnostics);
         const includeContentLog = daemonLogger.enabled && diagnostics.includeContent;
         const hasText = Boolean(textContent.trim());
@@ -752,7 +754,12 @@ export async function runDaemonServer({
             json(res, 400, { ok: false, error: "extractOnly requires mode=url" }, cors);
             return;
           }
+          let cookiesFilePath: string | null = null;
           try {
+            if (cookiesRaw) {
+              cookiesFilePath = path.join(tmpdir(), `summarize-cookies-${randomUUID()}.txt`);
+              await fs.writeFile(cookiesFilePath, cookiesRaw, "utf8");
+            }
             const requestCache: CacheState = noCache
               ? { ...cacheState, mode: "bypass" as const, store: null }
               : cacheState;
@@ -769,6 +776,7 @@ export async function runDaemonServer({
                   overrides,
                   format,
                   slides: slidesSettings,
+                  ytDlpCookiesFile: cookiesFilePath,
                 }),
             );
             const slidesPayload =
@@ -815,6 +823,10 @@ export async function runDaemonServer({
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             json(res, 500, { ok: false, error: message }, cors);
+          } finally {
+            if (cookiesFilePath) {
+              fs.unlink(cookiesFilePath).catch(() => {});
+            }
           }
           return;
         }
@@ -873,6 +885,7 @@ export async function runDaemonServer({
         json(res, 200, { ok: true, id: session.id }, cors);
 
         void runWithProcessContext({ runId: session.id, source: "summarize" }, async () => {
+          let cookiesFilePath: string | null = null;
           const slideLogState: {
             startedAt: number | null;
             requested: boolean;
@@ -895,6 +908,10 @@ export async function runDaemonServer({
             warnings: [],
           };
           try {
+            if (cookiesRaw) {
+              cookiesFilePath = path.join(tmpdir(), `summarize-cookies-${randomUUID()}.txt`);
+              await fs.writeFile(cookiesFilePath, cookiesRaw, "utf8");
+            }
             let emittedOutput = false;
             const sink = {
               writeChunk: (chunk: string) => {
@@ -981,6 +998,7 @@ export async function runDaemonServer({
                     mediaCache,
                     overrides,
                     slides: slidesSettings,
+                    ytDlpCookiesFile: cookiesFilePath,
                     hooks: {
                       ...(includeContentLog
                         ? {
@@ -1229,6 +1247,9 @@ export async function runDaemonServer({
                 : {}),
             });
           } finally {
+            if (cookiesFilePath) {
+              fs.unlink(cookiesFilePath).catch(() => {});
+            }
             scheduleSessionCleanup({ session, sessions });
           }
         });

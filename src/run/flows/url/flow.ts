@@ -511,6 +511,7 @@ export async function runUrlFlow({
           timeoutMs: flags.timeoutMs,
           ytDlpPath: model.apiStatus.ytDlpPath,
           ytDlpCookiesFromBrowser: model.apiStatus.ytDlpCookiesFromBrowser,
+          ytDlpCookiesFile: model.apiStatus.ytDlpCookiesFile,
           ffmpegPath: null,
           tesseractPath: null,
           hooks: {

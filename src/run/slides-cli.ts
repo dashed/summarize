@@ -226,6 +226,7 @@ export async function handleSlidesCliRequest({
       timeoutMs,
       ytDlpPath: envState.ytDlpPath,
       ytDlpCookiesFromBrowser: envState.ytDlpCookiesFromBrowser,
+      ytDlpCookiesFile: null,
       ffmpegPath: null,
       tesseractPath: null,
       hooks: {

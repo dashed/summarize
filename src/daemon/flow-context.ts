@@ -78,6 +78,7 @@ export type DaemonUrlFlowContextArgs = {
   format?: "text" | "markdown";
   overrides?: RunOverrides | null;
   extractOnly?: boolean;
+  ytDlpCookiesFile?: string | null;
   slides?: SlideSettings | null;
   hooks?: {
     onModelChosen?: ((modelId: string) => void) | null;
@@ -120,6 +121,7 @@ export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlF
     format,
     overrides,
     extractOnly,
+    ytDlpCookiesFile = null,
     slides,
     hooks,
     runStartedAtMs,
@@ -436,6 +438,7 @@ export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlF
         apifyToken,
         ytDlpPath,
         ytDlpCookiesFromBrowser,
+        ytDlpCookiesFile,
         falApiKey,
         groqApiKey,
         openaiTranscriptionKey,

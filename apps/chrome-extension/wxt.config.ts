@@ -64,6 +64,7 @@ export default defineConfig({
         "webNavigation",
         "scripting",
         "windows",
+        "cookies",
         ...(browser === "firefox" ? [] : ["debugger" as const]),
       ],
       optional_permissions: ["userScripts"],

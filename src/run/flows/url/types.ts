@@ -108,6 +108,7 @@ export type UrlFlowModel = {
     apifyToken: string | null;
     ytDlpPath: string | null;
     ytDlpCookiesFromBrowser: string | null;
+    ytDlpCookiesFile: string | null;
     falApiKey: string | null;
     groqApiKey: string | null;
     openaiTranscriptionKey: string | null;

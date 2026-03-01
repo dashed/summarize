@@ -306,6 +306,7 @@ export async function streamSummaryForUrl({
   mediaCache,
   overrides,
   slides,
+  ytDlpCookiesFile,
   hooks,
 }: {
   env: Record<string, string | undefined>;
@@ -321,6 +322,7 @@ export async function streamSummaryForUrl({
   mediaCache: MediaCache | null;
   overrides: RunOverrides;
   slides?: SlideSettings | null;
+  ytDlpCookiesFile?: string | null;
   hooks?: {
     onExtracted?: ((extracted: ExtractedLinkContent) => void) | null;
     onSlidesExtracted?: ((slides: SlideExtractionResult) => void) | null;
@@ -359,6 +361,7 @@ export async function streamSummaryForUrl({
     format,
     overrides,
     slides,
+    ytDlpCookiesFile,
     hooks: {
       onModelChosen: (modelId) => {
         usedModel = modelId;
@@ -437,6 +440,7 @@ export async function extractContentForUrl({
   overrides,
   format,
   slides,
+  ytDlpCookiesFile,
   hooks,
 }: {
   env: Record<string, string | undefined>;
@@ -447,6 +451,7 @@ export async function extractContentForUrl({
   overrides: RunOverrides;
   format?: "text" | "markdown";
   slides?: SlideSettings | null;
+  ytDlpCookiesFile?: string | null;
   hooks?: {
     onSlidesExtracted?: ((slides: SlideExtractionResult) => void) | null;
   } | null;
@@ -469,6 +474,7 @@ export async function extractContentForUrl({
     overrides,
     extractOnly: true,
     slides,
+    ytDlpCookiesFile,
     hooks: {
       onExtracted: (content) => {
         extractedRef.value = content;

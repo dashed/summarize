@@ -11,6 +11,7 @@ import {
 } from "../automation/artifacts-store";
 import { readAgentResponse } from "../lib/agent-response";
 import { buildChatPageContent } from "../lib/chat-context";
+import { exportYouTubeCookies } from "../lib/cookies";
 import { buildDaemonRequestBody, buildSummarizeRequestBody } from "../lib/daemon-payload";
 import { createDaemonRecovery, isDaemonUnreachableError } from "../lib/daemon-recovery";
 import { logExtensionEvent } from "../lib/extension-logs";
@@ -855,6 +856,7 @@ export default defineBackground(() => {
     }
 
     const wantsSlides = settings.slidesEnabled && shouldPreferUrlMode(tab.url);
+    const cookies = wantsSlides ? await exportYouTubeCookies() : null;
     const urlStatusLabel = wantsSlides
       ? "Extracting video + thumbnails…"
       : "Extracting video transcript…";
@@ -908,6 +910,7 @@ export default defineBackground(() => {
           extractOnly: true,
           timestamps: true,
           ...(wantsSlides ? { slides: true } : {}),
+          ...(cookies ? { cookies } : {}),
           maxCharacters: null,
         }),
         signal: extractController.signal,
@@ -1336,6 +1339,7 @@ export default defineBackground(() => {
       (effectiveInputMode === "video" ||
         resolvedPayload.media?.hasVideo === true ||
         shouldPreferUrlMode(resolvedPayload.url));
+    const summarizeCookies = wantsSlides ? await exportYouTubeCookies() : null;
     const wantsParallelSlides = wantsSlides && settings.slidesParallel;
     const summaryTimestamps = wantsSummaryTimestamps || (wantsSlides && !wantsParallelSlides);
     const slidesTimestamps = wantsSummaryTimestamps || wantsSlides;
@@ -1417,6 +1421,7 @@ export default defineBackground(() => {
         inputMode: effectiveInputMode,
         timestamps: summaryTimestamps,
         slides: summarySlides,
+        cookies: summarizeCookies,
       });
       logPanel("summarize:request", {
         url: resolvedPayload.url,
@@ -1465,6 +1470,7 @@ export default defineBackground(() => {
             inputMode: effectiveInputMode,
             timestamps: slidesTimestamps,
             slides: slidesConfig,
+            cookies: summarizeCookies,
           });
           logPanel("slides:request", { url: resolvedPayload.url });
           const res = await fetch("http://127.0.0.1:8787/v1/summarize", {

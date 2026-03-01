@@ -77,9 +77,17 @@ function resolveSlidesStreamFallback(env: Record<string, string | undefined>): b
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
-function buildYtDlpCookiesArgs(cookiesFromBrowser?: string | null): string[] {
-  const value = typeof cookiesFromBrowser === "string" ? cookiesFromBrowser.trim() : "";
-  return value.length > 0 ? ["--cookies-from-browser", value] : [];
+export function buildYtDlpCookiesArgs({
+  cookiesFile,
+  cookiesFromBrowser,
+}: {
+  cookiesFile?: string | null;
+  cookiesFromBrowser?: string | null;
+}): string[] {
+  const file = typeof cookiesFile === "string" ? cookiesFile.trim() : "";
+  if (file.length > 0) return ["--cookies", file];
+  const browser = typeof cookiesFromBrowser === "string" ? cookiesFromBrowser.trim() : "";
+  return browser.length > 0 ? ["--cookies-from-browser", browser] : [];
 }
 
 function buildSlidesMediaCacheKey(url: string): string {
@@ -119,6 +127,7 @@ type ExtractSlidesArgs = {
   timeoutMs: number;
   ytDlpPath: string | null;
   ytDlpCookiesFromBrowser?: string | null;
+  ytDlpCookiesFile?: string | null;
   ffmpegPath: string | null;
   tesseractPath: string | null;
   hooks?: {
@@ -222,6 +231,7 @@ export async function extractSlidesForSource({
   timeoutMs,
   ytDlpPath,
   ytDlpCookiesFromBrowser,
+  ytDlpCookiesFile,
   ffmpegPath,
   tesseractPath,
   hooks,
@@ -323,6 +333,7 @@ export async function extractSlidesForSource({
             url: source.url,
             timeoutMs,
             format,
+            cookiesFile: ytDlpCookiesFile,
             cookiesFromBrowser: ytDlpCookiesFromBrowser,
             onProgress: (percent, detail) => {
               const ratio = clamp(percent / 100, 0, 1);
@@ -352,6 +363,7 @@ export async function extractSlidesForSource({
             url: source.url,
             format,
             timeoutMs,
+            cookiesFile: ytDlpCookiesFile,
             cookiesFromBrowser: ytDlpCookiesFromBrowser,
           });
           inputPath = streamUrl;
@@ -375,6 +387,7 @@ export async function extractSlidesForSource({
               url: source.url,
               timeoutMs,
               format,
+              cookiesFile: ytDlpCookiesFile,
               cookiesFromBrowser: ytDlpCookiesFromBrowser,
               onProgress: (percent, detail) => {
                 const ratio = clamp(percent / 100, 0, 1);
@@ -404,6 +417,7 @@ export async function extractSlidesForSource({
               url: source.url,
               format,
               timeoutMs,
+              cookiesFile: ytDlpCookiesFile,
               cookiesFromBrowser: ytDlpCookiesFromBrowser,
             });
             inputPath = streamUrl;
@@ -734,6 +748,7 @@ async function downloadYoutubeVideo({
   url,
   timeoutMs,
   format,
+  cookiesFile,
   cookiesFromBrowser,
   onProgress,
 }: {
@@ -741,6 +756,7 @@ async function downloadYoutubeVideo({
   url: string;
   timeoutMs: number;
   format: string;
+  cookiesFile?: string | null;
   cookiesFromBrowser?: string | null;
   onProgress?: ((percent: number, detail?: string) => void) | null;
 }): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
@@ -755,7 +771,7 @@ async function downloadYoutubeVideo({
     "--no-warnings",
     "--concurrent-fragments",
     "4",
-    ...buildYtDlpCookiesArgs(cookiesFromBrowser),
+    ...buildYtDlpCookiesArgs({ cookiesFile, cookiesFromBrowser }),
     ...(onProgress ? ["--progress", "--newline", "--progress-template", progressTemplate] : []),
     "-o",
     outputTemplate,
@@ -937,15 +953,23 @@ async function resolveYoutubeStreamUrl({
   url,
   timeoutMs,
   format,
+  cookiesFile,
   cookiesFromBrowser,
 }: {
   ytDlpPath: string;
   url: string;
   timeoutMs: number;
   format: string;
+  cookiesFile?: string | null;
   cookiesFromBrowser?: string | null;
 }): Promise<string> {
-  const args = ["-f", format, ...buildYtDlpCookiesArgs(cookiesFromBrowser), "-g", url];
+  const args = [
+    "-f",
+    format,
+    ...buildYtDlpCookiesArgs({ cookiesFile, cookiesFromBrowser }),
+    "-g",
+    url,
+  ];
   const output = await runProcessCapture({
     command: ytDlpPath,
     args,
