@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (23 commits ahead of upstream)
+**Version:** `0.11.2-fork` (25 commits ahead of upstream)
 
 ---
 
@@ -59,11 +59,13 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Daemon status footer** — Shows daemon version + commit hash (e.g. `v0.11.2-fork . 35be332`) with green/red connection indicator
 - **Mode display** — Active source (Page/Video/Video + Slides) shown on Summarize button
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
+- **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId` is preserved across tab switches
 
 **Key files:**
 - `apps/chrome-extension/src/entrypoints/sidepanel/progress-stages.ts` — Pipeline stage resolution
 - `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — Progress bar, timer, status bar
 - `apps/chrome-extension/src/entrypoints/sidepanel/style.css` — UI styling
+- `apps/chrome-extension/src/entrypoints/sidepanel/panel-cache.ts` — `resolveRestoreAction()` for tab-switch restore decisions
 - `apps/chrome-extension/src/entrypoints/sidepanel/pickers.tsx` — Mode display on button
 
 ---
@@ -108,7 +110,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-23 commits ahead of upstream, oldest to newest:
+25 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -135,6 +137,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 21 | `6467000` | feat: cache fresh summaries on refresh and add e2e cache tests | Cache |
 | 22 | `ea9c0d5` | feat: enrich cache metadata with prompt, settings, and input stats | Cache |
 | 23 | `5542f3d` | feat: reframe prompts from summarization to content extraction for video | Prompts |
+| 24 | `a1e5eac` | docs: add FORK.md documenting all fork changes | Docs |
+| 25 | | fix: auto-restore summaries on tab switch back | Extension Fix |
 
 ---
 
@@ -161,6 +165,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/request-dump.test.ts` — Request dump system
 - `tests/cache.store.test.ts` — Cache store e2e tests
 - `tests/chrome-extension/progress-stages.test.ts` — Progress stage resolution
+- `tests/sidepanel.panel-cache.test.ts` — Panel cache controller and tab-switch restore logic
 
 ## Architecture Decisions
 
@@ -171,3 +176,4 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 5. **Cache read/write split** — "Clear and refresh" skips reads but always writes, so fresh summaries are persisted with full metadata for debugging
 6. **Provider routing forced to Google AI Studio** — Vertex doesn't support YouTube video_url parts; OpenRouter provider routing enforces this
 7. **Content extraction vs summarization** — Video prompts reframed from "summarize" to "extract into readable text with timestamps" for better output quality
+8. **Tab-switch SSE reconnect** — Save panel cache before aborting streams, then reconnect to daemon's SSE replay buffer on tab switch back for seamless restore

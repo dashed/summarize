@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPanelCacheController,
+  resolveRestoreAction,
   type PanelCachePayload,
 } from "../apps/chrome-extension/src/entrypoints/sidepanel/panel-cache.js";
 
@@ -101,5 +102,150 @@ describe("panel cache controller", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("syncNow preserves runId when summaryMarkdown is null (in-progress run)", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    const payload = samplePayload({ runId: "run-active", summaryMarkdown: null });
+    const controller = createPanelCacheController({
+      getSnapshot: () => payload,
+      sendCache,
+      sendRequest,
+    });
+
+    controller.syncNow();
+
+    const cached = controller.resolve(1, "https://example.com");
+    expect(cached).not.toBeNull();
+    expect(cached!.runId).toBe("run-active");
+    expect(cached!.summaryMarkdown).toBeNull();
+  });
+
+  it("syncNow before abort preserves state that would otherwise be lost", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    // Simulate mutable panel state that changes after syncNow
+    let currentState = samplePayload({ runId: "run-42", summaryMarkdown: null });
+    const controller = createPanelCacheController({
+      getSnapshot: () => currentState,
+      sendCache,
+      sendRequest,
+    });
+
+    // Step 1: syncNow captures in-progress state
+    controller.syncNow();
+
+    // Step 2: simulate abort + resetSummaryView (clears state)
+    currentState = samplePayload({ runId: null, summaryMarkdown: null });
+
+    // Step 3: resolve still returns the pre-abort snapshot
+    const cached = controller.resolve(1, "https://example.com");
+    expect(cached).not.toBeNull();
+    expect(cached!.runId).toBe("run-42");
+  });
+
+  it("tab switch simulation: sync tab A, switch to tab B, restore tab A with runId", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    // Tab A has an in-progress summarization
+    let currentState: PanelCachePayload | null = samplePayload({
+      tabId: 10,
+      url: "https://tab-a.example.com",
+      runId: "run-tab-a",
+      summaryMarkdown: null,
+    });
+    const controller = createPanelCacheController({
+      getSnapshot: () => currentState,
+      sendCache,
+      sendRequest,
+    });
+
+    // User switches to Tab B — syncNow captures Tab A state before abort
+    controller.syncNow();
+
+    // State is now cleared (simulates abort + resetSummaryView)
+    currentState = null;
+
+    // Tab B is active — cache for Tab B is empty
+    expect(controller.resolve(20, "https://tab-b.example.com")).toBeNull();
+
+    // User switches back to Tab A — resolve finds the cached state
+    const restored = controller.resolve(10, "https://tab-a.example.com");
+    expect(restored).not.toBeNull();
+    expect(restored!.runId).toBe("run-tab-a");
+    expect(restored!.summaryMarkdown).toBeNull();
+  });
+
+  it("syncNow preserves partial markdown from streaming", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    const payload = samplePayload({
+      runId: "run-partial",
+      summaryMarkdown: "# Title\n\nPartial content so far...",
+    });
+    const controller = createPanelCacheController({
+      getSnapshot: () => payload,
+      sendCache,
+      sendRequest,
+    });
+
+    controller.syncNow();
+
+    const cached = controller.resolve(1, "https://example.com");
+    expect(cached!.runId).toBe("run-partial");
+    expect(cached!.summaryMarkdown).toBe("# Title\n\nPartial content so far...");
+  });
+});
+
+describe("resolveRestoreAction", () => {
+  it("returns render action when summaryMarkdown is present", () => {
+    const payload = samplePayload({ summaryMarkdown: "# Summary\n\nContent here" });
+    const action = resolveRestoreAction(payload);
+    expect(action).toEqual({ kind: "render", markdown: "# Summary\n\nContent here" });
+  });
+
+  it("returns reconnect action when runId is present but no summaryMarkdown", () => {
+    const payload = samplePayload({
+      runId: "run-reconnect",
+      summaryMarkdown: null,
+      url: "https://example.com/video",
+      title: "My Video",
+    });
+    const action = resolveRestoreAction(payload);
+    expect(action).toEqual({
+      kind: "reconnect",
+      runId: "run-reconnect",
+      url: "https://example.com/video",
+      title: "My Video",
+    });
+  });
+
+  it("returns reconnect with empty title when title is null", () => {
+    const payload = samplePayload({
+      runId: "run-no-title",
+      summaryMarkdown: null,
+      title: null,
+    });
+    const action = resolveRestoreAction(payload);
+    expect(action.kind).toBe("reconnect");
+    if (action.kind === "reconnect") {
+      expect(action.title).toBe("");
+    }
+  });
+
+  it("returns empty action when neither summaryMarkdown nor runId is present", () => {
+    const payload = samplePayload({ runId: null, summaryMarkdown: null });
+    const action = resolveRestoreAction(payload);
+    expect(action).toEqual({ kind: "empty" });
+  });
+
+  it("prefers render over reconnect when both summaryMarkdown and runId are present", () => {
+    const payload = samplePayload({
+      runId: "run-complete",
+      summaryMarkdown: "# Complete Summary",
+    });
+    const action = resolveRestoreAction(payload);
+    expect(action.kind).toBe("render");
   });
 });

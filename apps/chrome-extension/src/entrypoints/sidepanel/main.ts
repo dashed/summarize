@@ -34,7 +34,11 @@ import { ChatController } from "./chat-controller";
 import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
-import { createPanelCacheController, type PanelCachePayload } from "./panel-cache";
+import {
+  createPanelCacheController,
+  resolveRestoreAction,
+  type PanelCachePayload,
+} from "./panel-cache";
 import {
   mountSidepanelLengthPicker,
   mountSidepanelPickers,
@@ -1182,8 +1186,19 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
     summaryFromCache: payload.summaryFromCache,
     hasSlides: Boolean(payload.slides && payload.slides.slides.length > 0),
   });
-  if (payload.summaryMarkdown) {
-    renderMarkdown(payload.summaryMarkdown);
+  const action = resolveRestoreAction(payload);
+  if (action.kind === "render") {
+    renderMarkdown(action.markdown);
+  } else if (action.kind === "reconnect") {
+    // Tab had an in-progress summarization — reconnect to daemon SSE replay
+    void streamController.start({
+      id: action.runId,
+      url: action.url,
+      title: action.title,
+      model: "",
+      reason: "tab-restore",
+    });
+    return;
   } else {
     renderMarkdownDisplay();
   }
@@ -3543,9 +3558,11 @@ function updateControls(state: UiState) {
     if (nextTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(nextTabId, nextTabUrl);
       if (cached) {
+        panelCacheController.syncNow();
         streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        panelCacheController.syncNow();
         streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
@@ -3553,6 +3570,7 @@ function updateControls(state: UiState) {
         panelCacheController.request(nextTabId, nextTabUrl, preserveChat);
       }
     } else {
+      panelCacheController.syncNow();
       streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
@@ -3575,9 +3593,11 @@ function updateControls(state: UiState) {
     if (activeTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(activeTabId, nextTabUrl);
       if (cached) {
+        panelCacheController.syncNow();
         streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        panelCacheController.syncNow();
         streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
@@ -3585,6 +3605,7 @@ function updateControls(state: UiState) {
         panelCacheController.request(activeTabId, nextTabUrl, preserveChat);
       }
     } else {
+      panelCacheController.syncNow();
       streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
