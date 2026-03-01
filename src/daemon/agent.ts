@@ -648,10 +648,6 @@ async function streamAgentWithVideo({
     // toolResult messages are skipped — this path has no tools.
   }
 
-  console.error(
-    `[summarize:agent-video] streamAgentWithVideo: model=${modelId}, videoUrl=${videoUrl}`,
-  );
-
   const isOpenRouter = /openrouter\.ai/i.test(baseUrl);
   const payload = {
     model: modelId,
@@ -665,6 +661,18 @@ async function streamAgentWithVideo({
       : {}),
   };
 
+  console.error(
+    `[video-debug] streamAgentWithVideo REQUEST: model=${modelId}, videoUrl=${videoUrl}, ` +
+      `reasoning=${reasoning ?? "none"}, isOpenRouter=${isOpenRouter}, ` +
+      `videoInjected=${videoInjected}, maxOutputTokens=${maxOutputTokens}`,
+  );
+  if (payload.provider) {
+    console.error(
+      `[video-debug] streamAgentWithVideo PROVIDER_ROUTING: ${JSON.stringify(payload.provider)}`,
+    );
+  }
+
+  const fetchStartMs = Date.now();
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -674,6 +682,11 @@ async function streamAgentWithVideo({
     body: JSON.stringify(payload),
     signal,
   });
+
+  const connectElapsedMs = Date.now() - fetchStartMs;
+  console.error(
+    `[video-debug] streamAgentWithVideo CONNECTED: elapsed=${connectElapsedMs}ms, status=${response.status}`,
+  );
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
@@ -716,6 +729,11 @@ async function streamAgentWithVideo({
       }
     }
   }
+
+  const totalElapsedMs = Date.now() - fetchStartMs;
+  console.error(
+    `[video-debug] streamAgentWithVideo DONE: elapsed=${totalElapsedMs}ms, chars=${fullText.length}`,
+  );
 
   return fullText;
 }
@@ -774,6 +792,13 @@ export async function streamAgentResponse({
     isYouTubeUrl(pageUrl) &&
     !automationEnabled &&
     provider === "openrouter";
+
+  console.error(
+    `[video-debug] streamAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
+      `automationEnabled=${automationEnabled}, provider=${provider}, ` +
+      `model=${model.id}, model.reasoning=${model.reasoning}, ` +
+      `reasoning=${reasoning ?? "none"}, useVideoPath=${useVideoPath}`,
+  );
 
   if (useVideoPath) {
     console.error(
@@ -894,6 +919,13 @@ export async function completeAgentResponse({
     isYouTubeUrl(pageUrl) &&
     !automationEnabled &&
     provider === "openrouter";
+
+  console.error(
+    `[video-debug] completeAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
+      `automationEnabled=${automationEnabled}, provider=${provider}, ` +
+      `model=${model.id}, model.reasoning=${model.reasoning}, ` +
+      `reasoning=${reasoning ?? "none"}, useVideoPath=${useVideoPath}`,
+  );
 
   if (useVideoPath) {
     let fullText = "";
