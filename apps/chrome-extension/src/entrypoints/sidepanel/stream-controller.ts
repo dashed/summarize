@@ -2,6 +2,7 @@ import type { PanelPhase, RunStart } from "./types";
 import {
   parseSseEvent,
   type SseMetaData,
+  type SseMetricsData,
   type SseSlidesData,
 } from "../../../../../src/shared/sse-events.js";
 import { mergeStreamingChunk } from "../../../../../src/shared/streaming-merge.js";
@@ -29,7 +30,7 @@ export type StreamControllerOptions = {
   onBaseSubtitle?: ((text: string) => void) | null;
   onRememberUrl?: ((url: string) => void) | null;
   onSummaryFromCache?: ((value: boolean | null) => void) | null;
-  onMetrics?: ((summary: string) => void) | null;
+  onMetrics?: ((metrics: SseMetricsData) => void) | null;
   onRender?: ((markdown: string) => void) | null;
   onSyncWithActiveTab?: (() => Promise<void>) | null;
   // Chat mode callbacks (optional for summarize mode)
@@ -215,7 +216,7 @@ export function createStreamController(options: StreamControllerOptions): Stream
             onStatus(raw);
           }
         } else if (event.event === "metrics") {
-          onMetrics?.(event.data.summary);
+          onMetrics?.(event.data);
         } else if (event.event === "error") {
           throw new Error(event.data.message);
         } else if (event.event === "done") {

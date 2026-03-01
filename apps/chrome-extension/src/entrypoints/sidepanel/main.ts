@@ -142,6 +142,7 @@ function byId<T extends HTMLElement>(id: string): T {
 }
 
 const subtitleEl = byId<HTMLDivElement>("subtitle");
+const elapsedEl = byId<HTMLSpanElement>("elapsed");
 const titleEl = byId<HTMLDivElement>("title");
 const headerEl = document.querySelector("header") as HTMLElement;
 if (!headerEl) throw new Error("Missing <header>");
@@ -1112,6 +1113,7 @@ async function clearCurrentView() {
   await clearChatHistoryForActiveTab();
   panelCacheController.scheduleSync();
   headerController.setStatus("");
+  clearElapsedTimer();
   setPhase("idle");
 }
 
@@ -3093,6 +3095,35 @@ const slidesSummaryController = createStreamController({
   },
 });
 
+/* ---------- Elapsed timer ---------- */
+let elapsedTimerId: ReturnType<typeof setInterval> | null = null;
+let elapsedStart = 0;
+
+function startElapsedTimer() {
+  stopElapsedTimer();
+  elapsedStart = performance.now();
+  elapsedEl.textContent = "0.0s";
+  elapsedTimerId = setInterval(() => {
+    const sec = (performance.now() - elapsedStart) / 1000;
+    elapsedEl.textContent = `${sec.toFixed(1)}s`;
+  }, 100);
+}
+
+function stopElapsedTimer(finalMs?: number) {
+  if (elapsedTimerId != null) {
+    clearInterval(elapsedTimerId);
+    elapsedTimerId = null;
+  }
+  if (finalMs != null && finalMs > 0) {
+    elapsedEl.textContent = `${(finalMs / 1000).toFixed(1)}s`;
+  }
+}
+
+function clearElapsedTimer() {
+  stopElapsedTimer();
+  elapsedEl.textContent = "";
+}
+
 const streamController = createStreamController({
   getToken: async () => (await loadSettings()).token,
   onReset: () => {
@@ -3108,6 +3139,8 @@ const streamController = createStreamController({
       };
     }
     lastStreamError = null;
+    headerController.resetProgress();
+    startElapsedTimer();
     if (pendingRunForPlannedSlides) {
       seedPlannedSlidesForRun(pendingRunForPlannedSlides);
       pendingRunForPlannedSlides = null;
@@ -3124,10 +3157,12 @@ const streamController = createStreamController({
   onPhaseChange: (phase) => {
     if (phase === "error") {
       setPhase("error", { error: lastStreamError ?? panelState.error });
+      stopElapsedTimer();
     } else {
       setPhase(phase);
     }
     if (phase === "idle") {
+      stopElapsedTimer();
       maybeApplyPendingSlidesSummary();
       if (panelState.slides && slideSummaryByIndex.size === 0) {
         rebuildSlideDescriptions();
@@ -3164,14 +3199,16 @@ const streamController = createStreamController({
     panelCacheController.scheduleSync();
     if (value === true) {
       headerController.stopProgress();
+      clearElapsedTimer();
     } else if (value === false && isStreaming()) {
       headerController.armProgress();
     }
   },
-  onMetrics: (summary) => {
+  onMetrics: (metrics) => {
+    stopElapsedTimer(metrics.elapsedMs);
     setMetricsForMode(
       "summary",
-      summary,
+      metrics.summary,
       panelState.lastMeta.inputSummary,
       panelState.currentSource?.url ?? null,
     );

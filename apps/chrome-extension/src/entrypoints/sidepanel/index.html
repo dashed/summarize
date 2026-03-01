@@ -11,7 +11,10 @@
       <div class="headerRow">
         <div class="brand">
           <div id="title" class="title">Summarize</div>
-          <div id="subtitle" class="subtitle"></div>
+          <div class="subtitleRow">
+            <div id="subtitle" class="subtitle"></div>
+            <span id="elapsed" class="elapsed"></span>
+          </div>
         </div>
         <div class="controls">
           <div id="summarizeControlRoot" class="summarizeControlRoot"></div>
@@ -26,6 +29,7 @@
       </div>
       <div id="progress" class="progress" aria-hidden="true">
         <div id="progressFill" class="progressFill"></div>
+        <span id="progressLabel" class="progressLabel"></span>
       </div>
       <div id="slideNotice" class="slideNotice hidden" role="status" aria-live="polite">
         <span id="slideNoticeMessage" class="slideNotice__message"></span>
