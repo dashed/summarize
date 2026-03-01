@@ -1145,7 +1145,13 @@ export async function summarizeExtractedUrl({
       lengthKey,
       languageKey,
     });
-    cacheStore.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs);
+    const cacheMeta = {
+      model: usedAttempt.userModelId,
+      length: lengthKey,
+      language: languageKey,
+      url,
+    };
+    cacheStore.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs, cacheMeta);
     writeVerbose(io.stderr, flags.verbose, "cache write summary", flags.verboseColor, io.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({
@@ -1160,6 +1166,7 @@ export async function summarizeExtractedUrl({
         selectionKey,
         { summary: summaryResult.summary, model: usedAttempt.userModelId },
         cacheState.ttlMs,
+        cacheMeta,
       );
       writeVerbose(
         io.stderr,

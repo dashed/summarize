@@ -299,7 +299,9 @@ export async function runUrlFlow({
           env: io.env,
         });
         if (cacheKey && cacheStore) {
-          cacheStore.setJson("extract", cacheKey, extracted, cacheState.ttlMs);
+          cacheStore.setJson("extract", cacheKey, extracted, cacheState.ttlMs, {
+            url: targetUrl,
+          });
           writeVerbose(
             io.stderr,
             flags.verbose,
@@ -531,7 +533,9 @@ export async function runUrlFlow({
             `Slides: done (${slidesExtracted.slides.length.toString()} slides) 100%`,
           );
           if (slidesCacheKey && cacheStore) {
-            cacheStore.setJson("slides", slidesCacheKey, slidesExtracted, cacheState.ttlMs);
+            cacheStore.setJson("slides", slidesCacheKey, slidesExtracted, cacheState.ttlMs, {
+              url: source.url,
+            });
             writeVerbose(
               io.stderr,
               flags.verbose,

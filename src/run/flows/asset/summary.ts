@@ -676,7 +676,12 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       lengthKey,
       languageKey,
     });
-    cacheStore.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs);
+    const cacheMeta = {
+      model: usedAttempt.userModelId,
+      length: lengthKey,
+      language: languageKey,
+    };
+    cacheStore.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs, cacheMeta);
     writeVerbose(ctx.stderr, ctx.verbose, "cache write summary", ctx.verboseColor, ctx.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({
@@ -691,6 +696,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         selectionKey,
         { summary: summaryResult.summary, model: usedAttempt.userModelId },
         ctx.cache.ttlMs,
+        cacheMeta,
       );
       writeVerbose(
         ctx.stderr,

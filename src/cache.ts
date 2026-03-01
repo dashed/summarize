@@ -55,11 +55,25 @@ function normalizeTranscriptSource(value: unknown): TranscriptSource | null {
     : null;
 }
 
+export type CacheMetadata = Record<string, unknown>;
+
 export type CacheStore = {
   getText: (kind: CacheKind, key: string) => string | null;
   getJson: <T>(kind: CacheKind, key: string) => T | null;
-  setText: (kind: CacheKind, key: string, value: string, ttlMs: number | null) => void;
-  setJson: (kind: CacheKind, key: string, value: unknown, ttlMs: number | null) => void;
+  setText: (
+    kind: CacheKind,
+    key: string,
+    value: string,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => void;
+  setJson: (
+    kind: CacheKind,
+    key: string,
+    value: unknown,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => void;
   clear: () => void;
   close: () => void;
   transcriptCache: TranscriptCache;
@@ -215,6 +229,13 @@ export async function createCacheStore({
   db.exec("CREATE INDEX IF NOT EXISTS idx_cache_accessed ON cache_entries(last_accessed_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at)");
 
+  // Migration: add metadata column for existing databases
+  try {
+    db.exec("ALTER TABLE cache_entries ADD COLUMN metadata TEXT");
+  } catch {
+    // Column already exists — ignore
+  }
+
   const stmtGet = db.prepare(
     "SELECT value, expires_at, size_bytes FROM cache_entries WHERE kind = ? AND key = ?",
   );
@@ -227,14 +248,15 @@ export async function createCacheStore({
   );
   const stmtUpsert = db.prepare(`
     INSERT INTO cache_entries (
-      kind, key, value, size_bytes, created_at, last_accessed_at, expires_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      kind, key, value, size_bytes, created_at, last_accessed_at, expires_at, metadata
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(kind, key) DO UPDATE SET
       value = excluded.value,
       size_bytes = excluded.size_bytes,
       created_at = excluded.created_at,
       last_accessed_at = excluded.last_accessed_at,
-      expires_at = excluded.expires_at
+      expires_at = excluded.expires_at,
+      metadata = excluded.metadata
   `);
   const stmtTotalSize = db.prepare(
     "SELECT COALESCE(SUM(size_bytes), 0) AS total FROM cache_entries",
@@ -305,17 +327,30 @@ export async function createCacheStore({
     }
   };
 
-  const setText = (kind: CacheKind, key: string, value: string, ttlMs: number | null) => {
+  const setText = (
+    kind: CacheKind,
+    key: string,
+    value: string,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => {
     const now = Date.now();
     sweepExpired(now);
     const expiresAt = typeof ttlMs === "number" ? now + ttlMs : null;
     const sizeBytes = Buffer.byteLength(value, "utf8");
-    stmtUpsert.run(kind, key, value, sizeBytes, now, now, expiresAt);
+    const metaJson = metadata ? JSON.stringify(metadata) : null;
+    stmtUpsert.run(kind, key, value, sizeBytes, now, now, expiresAt, metaJson);
     enforceSize();
   };
 
-  const setJson = (kind: CacheKind, key: string, value: unknown, ttlMs: number | null) => {
-    setText(kind, key, JSON.stringify(value), ttlMs);
+  const setJson = (
+    kind: CacheKind,
+    key: string,
+    value: unknown,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => {
+    setText(kind, key, JSON.stringify(value), ttlMs, metadata);
   };
 
   const clear = () => {
