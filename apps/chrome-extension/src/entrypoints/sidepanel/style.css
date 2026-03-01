@@ -2523,6 +2523,44 @@ button.setup__pill.isActive {
   cursor: not-allowed;
 }
 
+/* ── Status bar (daemon version footer) ── */
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--muted, #888);
+  border-top: 1px solid color-mix(in srgb, var(--border, #ccc) 40%, transparent);
+  background: var(--bg0, #f5f7fb);
+  flex-shrink: 0;
+  user-select: text;
+}
+
+.statusBar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusBar[data-state="ok"] .statusBar__dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #16a34a 15%, transparent);
+}
+
+.statusBar[data-state="error"] .statusBar__dot {
+  background: #dc2626;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #dc2626 15%, transparent);
+}
+
+.statusBar__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hidden {
   display: none;
 }

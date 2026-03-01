@@ -112,7 +112,7 @@ type ArtifactsRequest = {
 
 type UiState = {
   panelOpen: boolean;
-  daemon: { ok: boolean; authed: boolean; error?: string };
+  daemon: { ok: boolean; authed: boolean; error?: string; version?: string; commit?: string };
   tab: { id: number | null; url: string | null; title: string | null };
   media: { hasVideo: boolean; hasAudio: boolean; hasCaptions: boolean } | null;
   stats: { pageWords: number | null; videoDurationSeconds: number | null };
@@ -290,7 +290,12 @@ async function getActiveTab(windowId?: number): Promise<chrome.tabs.Tab | null> 
   return tab ?? null;
 }
 
-async function daemonHealth(): Promise<{ ok: boolean; error?: string }> {
+async function daemonHealth(): Promise<{
+  ok: boolean;
+  error?: string;
+  version?: string;
+  commit?: string;
+}> {
   for (let attempt = 0; attempt < DAEMON_STATUS_MAX_ATTEMPTS; attempt += 1) {
     try {
       const controller = new AbortController();
@@ -298,7 +303,16 @@ async function daemonHealth(): Promise<{ ok: boolean; error?: string }> {
       const res = await fetch("http://127.0.0.1:8787/health", { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
-      return { ok: true };
+      try {
+        const json = (await res.json()) as { version?: string; commit?: string };
+        return {
+          ok: true,
+          version: typeof json.version === "string" ? json.version : undefined,
+          commit: typeof json.commit === "string" ? json.commit : undefined,
+        };
+      } catch {
+        return { ok: true };
+      }
     } catch (err) {
       const shouldRetry = attempt < DAEMON_STATUS_MAX_ATTEMPTS - 1 && shouldRetryDaemon(err);
       if (shouldRetry) {
@@ -1011,7 +1025,13 @@ export default defineBackground(() => {
     }
     const state: UiState = {
       panelOpen: isPanelOpen(session),
-      daemon: { ok: health.ok, authed: authed.ok, error: health.error ?? authed.error },
+      daemon: {
+        ok: health.ok,
+        authed: authed.ok,
+        error: health.error ?? authed.error,
+        version: health.version,
+        commit: health.commit,
+      },
       tab: { id: tab?.id ?? null, url: tab?.url ?? null, title: tab?.title ?? null },
       media: cached?.media ?? null,
       stats: {

@@ -18,7 +18,7 @@ import { createMediaCacheFromConfig } from "../run/media-cache-state.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
 import { encodeSseEvent, type SseEvent, type SseSlidesData } from "../shared/sse-events.js";
 import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js";
-import { resolvePackageVersion } from "../version.js";
+import { resolveGitSha, resolvePackageVersion } from "../version.js";
 import { completeAgentResponse, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
@@ -447,7 +447,12 @@ function scheduleSessionCleanup({
 }
 
 export function buildHealthPayload(importMetaUrl?: string) {
-  return { ok: true, pid: process.pid, version: resolvePackageVersion(importMetaUrl) };
+  return {
+    ok: true,
+    pid: process.pid,
+    version: resolvePackageVersion(importMetaUrl),
+    commit: resolveGitSha(importMetaUrl) ?? null,
+  };
 }
 
 export async function runDaemonServer({

@@ -3672,6 +3672,22 @@ function updateControls(state: UiState) {
   } else if (!showingSetup && panelState.phase === "setup") {
     setPhase("idle");
   }
+  updateStatusBar(state);
+}
+
+function updateStatusBar(state: UiState) {
+  const bar = document.getElementById("statusBar");
+  const textEl = document.getElementById("statusBarText");
+  if (!bar || !textEl) return;
+  if (state.daemon.ok && state.daemon.authed) {
+    bar.dataset.state = "ok";
+    const v = state.daemon.version ? `v${state.daemon.version}` : "";
+    const c = state.daemon.commit ?? "";
+    textEl.textContent = v && c ? `${v} \u00B7 ${c}` : v || "Connected";
+  } else {
+    bar.dataset.state = "error";
+    textEl.textContent = "Daemon disconnected";
+  }
 }
 
 function handleBgMessage(msg: BgToPanel) {
