@@ -39,6 +39,7 @@ const ENV_KEYS = [
   "GEMINI_PATH",
   "AGENT_PATH",
   "UVX_PATH",
+  "SUMMARIZE_DEBUG_DUMP",
 ] as const;
 
 export type EnvSnapshot = Partial<Record<(typeof ENV_KEYS)[number], string>>;

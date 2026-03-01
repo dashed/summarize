@@ -406,6 +406,11 @@ export async function streamSummaryForUrl({
   // LLM request is in flight.  Real status events (not SSE comments) are needed
   // because the extension only resets its timer on parsed events.
   const isYoutube = isYouTubeUrl(input.url);
+  if (isYoutube) {
+    console.error(
+      `[video-debug] streamSummaryForUrl START: url=${input.url}, isYouTube=true`,
+    );
+  }
   let videoKeepalive: ReturnType<typeof setInterval> | null = null;
   if (isYoutube && writeStatus) {
     let tick = 0;
@@ -414,15 +419,26 @@ export async function streamSummaryForUrl({
       writeStatus?.(`Processing video… (${tick * 30}s)`);
     }, 30_000);
   }
+  const flowStartMs = Date.now();
   try {
     await runUrlFlow({ ctx, url: input.url, isYoutubeUrl: isYoutube });
   } finally {
     if (videoKeepalive) clearInterval(videoKeepalive);
   }
+  const flowElapsedMs = Date.now() - flowStartMs;
 
   const extracted = extractedRef.value;
   if (!extracted) {
     throw new Error("Internal error: missing extracted content");
+  }
+
+  if (isYoutube) {
+    console.error(
+      `[video-debug] streamSummaryForUrl FLOW_DONE: elapsed=${flowElapsedMs}ms, ` +
+        `duration=${extracted.mediaDurationSeconds ?? "?"}s, ` +
+        `transcriptChars=${extracted.transcriptCharacters ?? "?"}, ` +
+        `hasVideo=${!!extracted.video}, isVideoOnly=${extracted.isVideoOnly}`,
+    );
   }
 
   const report = await ctx.hooks.buildReport();

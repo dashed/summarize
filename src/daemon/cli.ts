@@ -469,6 +469,9 @@ export async function handleDaemonRequest({
     if (mergedEnv.PATH) {
       process.env.PATH = mergedEnv.PATH;
     }
+    if (mergedEnv.SUMMARIZE_DEBUG_DUMP) {
+      process.env.SUMMARIZE_DEBUG_DUMP = mergedEnv.SUMMARIZE_DEBUG_DUMP;
+    }
     await runDaemonServer({ env: mergedEnv, fetchImpl, config: cfg });
     return true;
   }

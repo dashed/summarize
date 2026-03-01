@@ -9,6 +9,7 @@ import { createUnsupportedFunctionalityError } from "../errors.js";
 import { normalizeOpenAiUsage, normalizeTokenUsage } from "../usage.js";
 import { resolveOpenAiModel } from "./models.js";
 import { bytesToBase64 } from "./shared.js";
+import { dumpVideoRequest } from "../../debug/request-dump.js";
 
 export type OpenAiClientConfigInput = {
   apiKeys: {
@@ -272,6 +273,11 @@ export async function completeOpenAiTextWithVideo({
       `baseUrl=${baseUrl}, parts=[text=${partCounts.text}, image=${partCounts.image}, video=${partCounts.video_url}], ` +
       `videoUrls=${videoUrls.join(", ")}`,
   );
+  console.error(
+    `[video-debug] completeOpenAiTextWithVideo REQUEST: model=${modelId}, isOpenRouter=${openaiConfig.isOpenRouter}, ` +
+      `reasoning=${reasoning ?? "none"}, timeout=${timeoutMs}ms, maxOutputTokens=${maxOutputTokens ?? "default"}, ` +
+      `temperature=${temperature ?? "default"}, apiKey=***${openaiConfig.apiKey.slice(-4)}`,
+  );
 
   // Build the user message content array with text, image_url, and video_url parts.
   const contentParts: Array<Record<string, unknown>> = [];
@@ -309,8 +315,15 @@ export async function completeOpenAiTextWithVideo({
       : {}),
   };
 
+  if (openaiConfig.isOpenRouter && payload.provider) {
+    console.error(
+      `[video-debug] completeOpenAiTextWithVideo PROVIDER_ROUTING: ${JSON.stringify(payload.provider)}`,
+    );
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchStartMs = Date.now();
 
   try {
     const response = await fetchImpl(url, {
@@ -324,10 +337,24 @@ export async function completeOpenAiTextWithVideo({
     });
 
     const bodyText = await response.text();
+    const fetchElapsedMs = Date.now() - fetchStartMs;
     console.error(
       `[summarize:video] completeOpenAiTextWithVideo response: status=${response.status}, ` +
         `bodyLength=${bodyText.length} chars`,
     );
+    console.error(
+      `[video-debug] completeOpenAiTextWithVideo FETCH_DONE: elapsed=${fetchElapsedMs}ms, status=${response.status}`,
+    );
+
+    // Log useful x- response headers (provider info, rate limits, timing).
+    const xHeaders: string[] = [];
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase().startsWith("x-")) xHeaders.push(`${key}=${value}`);
+    });
+    if (xHeaders.length > 0) {
+      console.error(`[video-debug] completeOpenAiTextWithVideo HEADERS: ${xHeaders.join(", ")}`);
+    }
+
     if (!response.ok) {
       console.error(
         `[summarize:video] completeOpenAiTextWithVideo ERROR: ${bodyText.slice(0, 500)}`,
@@ -351,6 +378,30 @@ export async function completeOpenAiTextWithVideo({
       `[summarize:video] completeOpenAiTextWithVideo success: responseChars=${text.length}, ` +
         `usage=${JSON.stringify(usage)}`,
     );
+
+    // Log raw token breakdown including any reasoning/thinking tokens.
+    const rawUsage = data.usage as Record<string, unknown> | undefined;
+    if (rawUsage) {
+      const details = rawUsage.completion_tokens_details as Record<string, unknown> | undefined;
+      console.error(
+        `[video-debug] completeOpenAiTextWithVideo TOKENS: prompt=${rawUsage.prompt_tokens ?? "?"}, ` +
+          `completion=${rawUsage.completion_tokens ?? "?"}, ` +
+          `reasoning=${details?.reasoning_tokens ?? details?.thinking_tokens ?? "n/a"}, ` +
+          `total=${rawUsage.total_tokens ?? "?"}`,
+      );
+    }
+
+    // Fire-and-forget debug dump
+    dumpVideoRequest({
+      url,
+      payload,
+      apiKey: openaiConfig.apiKey,
+      modelId,
+      usage,
+      elapsedMs: fetchElapsedMs,
+      provider: response.headers.get("x-provider") ?? undefined,
+    });
+
     return { text, usage };
   } finally {
     clearTimeout(timeout);
@@ -404,6 +455,11 @@ export function streamOpenAiTextWithVideo({
       `baseUrl=${baseUrl}, parts=[text=${partCounts.text}, image=${partCounts.image}, video=${partCounts.video_url}], ` +
       `videoUrls=${videoUrls.join(", ")}`,
   );
+  console.error(
+    `[video-debug] streamOpenAiTextWithVideo REQUEST: model=${modelId}, isOpenRouter=${openaiConfig.isOpenRouter}, ` +
+      `reasoning=${reasoning ?? "none"}, timeout=${timeoutMs}ms, maxOutputTokens=${maxOutputTokens ?? "default"}, ` +
+      `temperature=${temperature ?? "default"}, apiKey=***${openaiConfig.apiKey.slice(-4)}`,
+  );
 
   // Build the user message content array.
   const contentParts: Array<Record<string, unknown>> = [];
@@ -442,6 +498,12 @@ export function streamOpenAiTextWithVideo({
       : {}),
   };
 
+  if (openaiConfig.isOpenRouter && payload.provider) {
+    console.error(
+      `[video-debug] streamOpenAiTextWithVideo PROVIDER_ROUTING: ${JSON.stringify(payload.provider)}`,
+    );
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let usageResolve: (v: LlmTokenUsage | null) => void;
@@ -449,8 +511,11 @@ export function streamOpenAiTextWithVideo({
     usageResolve = res;
   });
 
+  const streamStartMs = Date.now();
+
   const textStream: AsyncIterable<string> = {
     async *[Symbol.asyncIterator]() {
+      let streamProvider: string | undefined;
       try {
         const response = await fetchImpl(url, {
           method: "POST",
@@ -461,6 +526,22 @@ export function streamOpenAiTextWithVideo({
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
+
+        streamProvider = response.headers.get("x-provider") ?? undefined;
+
+        const connectElapsedMs = Date.now() - streamStartMs;
+        console.error(
+          `[video-debug] streamOpenAiTextWithVideo CONNECTED: elapsed=${connectElapsedMs}ms, status=${response.status}`,
+        );
+
+        // Log useful x- response headers (provider info, rate limits, timing).
+        const xHeaders: string[] = [];
+        response.headers.forEach((value, key) => {
+          if (key.toLowerCase().startsWith("x-")) xHeaders.push(`${key}=${value}`);
+        });
+        if (xHeaders.length > 0) {
+          console.error(`[video-debug] streamOpenAiTextWithVideo HEADERS: ${xHeaders.join(", ")}`);
+        }
 
         if (!response.ok) {
           const bodyText = await response.text().catch(() => "");
@@ -476,6 +557,7 @@ export function streamOpenAiTextWithVideo({
         let buffer = "";
         let totalChars = 0;
         let lastUsage: LlmTokenUsage | null = null;
+        let lastRawUsage: Record<string, unknown> | null = null;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -504,6 +586,7 @@ export function streamOpenAiTextWithVideo({
               }
               if (parsed.usage) {
                 lastUsage = normalizeOpenAiUsage(parsed.usage);
+                lastRawUsage = parsed.usage as Record<string, unknown>;
               }
             } catch {
               // skip malformed JSON chunks
@@ -511,12 +594,43 @@ export function streamOpenAiTextWithVideo({
           }
         }
 
+        const totalElapsedMs = Date.now() - streamStartMs;
         console.error(
           `[summarize:video] streamOpenAiTextWithVideo completed: totalChars=${totalChars}, ` +
             `usage=${JSON.stringify(lastUsage)}`,
         );
+        console.error(
+          `[video-debug] streamOpenAiTextWithVideo DONE: totalElapsed=${totalElapsedMs}ms, chars=${totalChars}`,
+        );
+
+        // Log raw token breakdown including any reasoning/thinking tokens.
+        if (lastRawUsage) {
+          const details = lastRawUsage.completion_tokens_details as Record<string, unknown> | undefined;
+          console.error(
+            `[video-debug] streamOpenAiTextWithVideo TOKENS: prompt=${lastRawUsage.prompt_tokens ?? "?"}, ` +
+              `completion=${lastRawUsage.completion_tokens ?? "?"}, ` +
+              `reasoning=${details?.reasoning_tokens ?? details?.thinking_tokens ?? "n/a"}, ` +
+              `total=${lastRawUsage.total_tokens ?? "?"}`,
+          );
+        }
+
+        // Fire-and-forget debug dump
+        dumpVideoRequest({
+          url,
+          payload,
+          apiKey: openaiConfig.apiKey,
+          modelId,
+          usage: lastUsage,
+          elapsedMs: Date.now() - streamStartMs,
+          provider: streamProvider,
+        });
+
         usageResolve!(lastUsage);
       } catch (error) {
+        const errorElapsedMs = Date.now() - streamStartMs;
+        console.error(
+          `[video-debug] streamOpenAiTextWithVideo ERROR: elapsed=${errorElapsedMs}ms, error=${error instanceof Error ? error.message : String(error)}`,
+        );
         usageResolve!(null);
         throw error;
       } finally {
@@ -553,6 +667,10 @@ export async function getVideoTimestampsFromGemini({
 
   console.error(
     `[summarize:video] getVideoTimestampsFromGemini: model=${model}, videoUrl=${videoUrl}, maxSlides=${effectiveMaxSlides}`,
+  );
+  console.error(
+    `[video-debug] getVideoTimestampsFromGemini REQUEST: model=${model}, timeout=${timeoutMs}ms, ` +
+      `apiKey=***${openrouterApiKey.slice(-4)}`,
   );
 
   const url = "https://openrouter.ai/api/v1/chat/completions";
@@ -614,8 +732,13 @@ export async function getVideoTimestampsFromGemini({
     },
   };
 
+  console.error(
+    `[video-debug] getVideoTimestampsFromGemini PROVIDER_ROUTING: ${JSON.stringify(payload.provider)}`,
+  );
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchStartMs = Date.now();
 
   try {
     const response = await fetchImpl(url, {
@@ -629,9 +752,22 @@ export async function getVideoTimestampsFromGemini({
     });
 
     const bodyText = await response.text();
+    const fetchElapsedMs = Date.now() - fetchStartMs;
     console.error(
       `[summarize:video] getVideoTimestampsFromGemini response: status=${response.status}, bodyLength=${bodyText.length} chars`,
     );
+    console.error(
+      `[video-debug] getVideoTimestampsFromGemini FETCH_DONE: elapsed=${fetchElapsedMs}ms, status=${response.status}`,
+    );
+
+    // Log useful x- response headers (provider info, rate limits, timing).
+    const xHeaders: string[] = [];
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase().startsWith("x-")) xHeaders.push(`${key}=${value}`);
+    });
+    if (xHeaders.length > 0) {
+      console.error(`[video-debug] getVideoTimestampsFromGemini HEADERS: ${xHeaders.join(", ")}`);
+    }
 
     if (!response.ok) {
       console.error(
@@ -647,7 +783,20 @@ export async function getVideoTimestampsFromGemini({
 
     const data = JSON.parse(bodyText) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: Record<string, unknown>;
     };
+
+    // Log raw token breakdown.
+    if (data.usage) {
+      const details = data.usage.completion_tokens_details as Record<string, unknown> | undefined;
+      console.error(
+        `[video-debug] getVideoTimestampsFromGemini TOKENS: prompt=${data.usage.prompt_tokens ?? "?"}, ` +
+          `completion=${data.usage.completion_tokens ?? "?"}, ` +
+          `reasoning=${details?.reasoning_tokens ?? details?.thinking_tokens ?? "n/a"}, ` +
+          `total=${data.usage.total_tokens ?? "?"}`,
+      );
+    }
+
     const rawContent = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!rawContent) {
       throw new Error(

@@ -363,6 +363,10 @@ export async function generateTextWithModelId({
         forceChatCompletions,
       });
       const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
+      console.error(
+        `[video-debug] generateTextWithModelId ROUTE: path=video/non-streaming, model=${parsed.canonical}, ` +
+          `reasoning=${effectiveReasoning ?? "none"}, timeout=${videoTimeoutMs}ms (original=${timeoutMs}ms, min=${VIDEO_MIN_TIMEOUT_MS}ms)`,
+      );
       const result = await completeOpenAiTextWithVideo({
         modelId: parsed.model,
         openaiConfig,
@@ -643,6 +647,10 @@ export async function streamTextWithModelId({
     );
 
     const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
+    console.error(
+      `[video-debug] streamTextWithModelId ROUTE: path=video/streaming, model=${parsed.canonical}, ` +
+        `reasoning=${effectiveReasoning ?? "none"}, timeout=${videoTimeoutMs}ms (original=${timeoutMs}ms, min=${VIDEO_MIN_TIMEOUT_MS}ms)`,
+    );
     const streamResult = streamOpenAiTextWithVideo({
       modelId: parsed.model,
       openaiConfig,
