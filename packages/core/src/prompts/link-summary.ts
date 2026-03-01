@@ -165,7 +165,9 @@ export function buildLinkSummaryPrompt({
       : `Target length: up to ${formatCount(effectiveSummaryLength.maxCharacters)} characters total (including Markdown and whitespace). Hard limit: do not exceed it.`;
   const contentLengthLine =
     contentCharacters > 0
-      ? `Extracted content length: ${formatCount(contentCharacters)} characters. Hard limit: never exceed this length. If the requested length is larger, do not pad—finish early rather than adding filler.`
+      ? hasTranscript || isYouTube
+        ? `Extracted transcript/content length: ${formatCount(contentCharacters)} characters. The transcript is only the spoken words; your writeup should also describe visual elements, organize information with headings, and include timestamps — so it can be longer than the raw transcript. Do not pad with filler, but do use the full allowed summary length for thorough coverage.`
+        : `Extracted content length: ${formatCount(contentCharacters)} characters. Hard limit: never exceed this length. If the requested length is larger, do not pad—finish early rather than adding filler.`
       : "";
 
   const shareLines = shares.map((share) => {

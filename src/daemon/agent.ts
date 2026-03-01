@@ -44,6 +44,10 @@ Professional, concise, pragmatic. Use "I" for your actions. Match the user's ton
 - If the user wants automation, ask them to enable Automation in Settings.
 `;
 
+const TIMESTAMP_INSTRUCTION = `
+# Timestamps
+When the page content includes a transcript with [mm:ss] or [hh:mm:ss] timestamps, weave them into your answers wherever you reference a specific moment. Format: [mm:ss] (or [hh:mm:ss]). The user can click these to jump to that point in the video. Do not invent timestamps — only use ones present in the transcript.`;
+
 export function buildAgentPromptHash(automationEnabled: boolean): string {
   return buildPromptHash(automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY);
 }
@@ -308,7 +312,9 @@ function buildSystemPrompt({
   automationEnabled: boolean;
 }): string {
   const base = automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY;
-  return `${base}
+  const hasTimestamps = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pageContent);
+  const timestampBlock = hasTimestamps ? TIMESTAMP_INSTRUCTION : "";
+  return `${base}${timestampBlock}
 
 Page URL: ${pageUrl}
 ${pageTitle ? `Page Title: ${pageTitle}` : ""}

@@ -84,7 +84,7 @@ describe("buildLinkSummaryPrompt", () => {
       "- @steipete (2025-12-17) [1,200 likes, 45 reshares, 2 replies]: Worth reading",
     );
     expect(prompt).toContain('append a brief subsection titled "What sharers are saying"');
-    expect(prompt).toContain("Use 2-5 short paragraphs.");
+    expect(prompt).toContain("Organize content under Markdown headings into distinct sections.");
     expect(prompt).toContain(
       "Use short paragraphs; use bullet lists only when they improve scanability; avoid rigid templates.",
     );

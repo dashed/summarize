@@ -37,7 +37,7 @@ const baseExtracted: ExtractedLinkContent = {
 };
 
 describe("buildUrlPrompt with transcript timestamps", () => {
-  it("forces timestamped bullets when timed transcript is present", () => {
+  it("forces inline timestamps for YouTube when timed transcript is present", () => {
     const prompt = buildUrlPrompt({
       extracted: {
         ...baseExtracted,
@@ -52,12 +52,11 @@ describe("buildUrlPrompt with transcript timestamps", () => {
     });
 
     expect(prompt).toContain("Key moments");
-    expect(prompt).toContain("Start each bullet with a [mm:ss]");
-    expect(prompt).toContain("do not prepend timestamps outside the Key moments section");
-    expect(prompt).toContain("Use 1-2 short paragraphs");
+    expect(prompt).toContain("Weave [mm:ss]");
+    expect(prompt).toContain("timestamps throughout the summary");
   });
 
-  it("keeps default formatting when timestamps are unavailable", () => {
+  it("includes YouTube timestamp instruction even without timed transcript", () => {
     const prompt = buildUrlPrompt({
       extracted: { ...baseExtracted, transcriptTimedText: null, transcriptSegments: null },
       outputLanguage: { kind: "auto" },
@@ -67,7 +66,27 @@ describe("buildUrlPrompt with transcript timestamps", () => {
       languageInstruction: null,
     });
 
+    // YouTube videos always get timestamp instructions (even without timed text)
+    expect(prompt).toContain("Key moments");
+    expect(prompt).toContain("Weave [mm:ss]");
+  });
+
+  it("omits timestamps for non-YouTube content without timed transcript", () => {
+    const prompt = buildUrlPrompt({
+      extracted: {
+        ...baseExtracted,
+        siteName: "Vimeo",
+        transcriptTimedText: null,
+        transcriptSegments: null,
+      },
+      outputLanguage: { kind: "auto" },
+      lengthArg: { kind: "preset", preset: "short" },
+      promptOverride: null,
+      lengthInstruction: null,
+      languageInstruction: null,
+    });
+
     expect(prompt).not.toContain("Key moments");
-    expect(prompt).toContain("Use 1-2 short paragraphs");
+    expect(prompt).not.toContain("Weave [mm:ss]");
   });
 });
