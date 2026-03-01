@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Prompt } from "../src/llm/prompt.js";
-import { streamTextWithModelId } from "../src/llm/generate-text.js";
+import { streamTextWithModelId, VIDEO_MIN_TIMEOUT_MS } from "../src/llm/generate-text.js";
 
 // Mock the OpenAI provider to capture calls.
 vi.mock("../src/llm/providers/openai.js", async () => {
@@ -9,9 +9,24 @@ vi.mock("../src/llm/providers/openai.js", async () => {
   );
   return {
     ...actual,
+    // Still mock the non-streaming version (used in generateTextWithModelId)
     completeOpenAiTextWithVideo: vi.fn().mockResolvedValue({
       text: "Video summary from stream fallback",
       usage: { inputTokens: 200, outputTokens: 80, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    }),
+    // Mock the streaming version (used in streamTextWithModelId)
+    streamOpenAiTextWithVideo: vi.fn().mockReturnValue({
+      textStream: (async function* () {
+        yield "Video ";
+        yield "summary ";
+        yield "from stream";
+      })(),
+      usage: Promise.resolve({
+        inputTokens: 200,
+        outputTokens: 80,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
     }),
   };
 });
@@ -48,12 +63,26 @@ const baseApiKeys = {
 
 describe("streamTextWithModelId video routing", () => {
   beforeEach(async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
-    (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mockClear();
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
+    (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mockClear();
+    // Re-create the mock return value (generators are consumed after first use)
+    (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mockReturnValue({
+      textStream: (async function* () {
+        yield "Video ";
+        yield "summary ";
+        yield "from stream";
+      })(),
+      usage: Promise.resolve({
+        inputTokens: 200,
+        outputTokens: 80,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      }),
+    });
   });
 
-  it("falls back to non-streaming completeOpenAiTextWithVideo for openai provider with video_url parts", async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
+  it("uses streaming streamOpenAiTextWithVideo for openai provider with video_url parts", async () => {
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
 
     const prompt: Prompt = {
       system: "You are a summarizer.",
@@ -80,18 +109,18 @@ describe("streamTextWithModelId video routing", () => {
       chunks.push(chunk);
     }
 
-    // Should emit the full text as a single chunk (wrapped non-streaming result).
-    expect(chunks).toEqual(["Video summary from stream fallback"]);
+    // Should emit multiple chunks (true streaming).
+    expect(chunks).toEqual(["Video ", "summary ", "from stream"]);
     expect(result.canonicalModelId).toBe("openai/google/gemini-3-flash-preview");
     expect(result.provider).toBe("openai");
 
-    // Verify completeOpenAiTextWithVideo was called with the original parts (not stripped).
-    expect(completeOpenAiTextWithVideo).toHaveBeenCalled();
-    const callArgs = (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    // Verify streamOpenAiTextWithVideo was called with the original parts (not stripped).
+    expect(streamOpenAiTextWithVideo).toHaveBeenCalled();
+    const callArgs = (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArgs.interleavedParts).toEqual(prompt.interleavedParts);
     expect(callArgs.system).toBe("You are a summarizer.");
 
-    // Usage should resolve to the value from completeOpenAiTextWithVideo.
+    // Usage should resolve to the value from streamOpenAiTextWithVideo.
     const usage = await result.usage;
     expect(usage).toEqual({
       inputTokens: 200,
@@ -102,8 +131,7 @@ describe("streamTextWithModelId video routing", () => {
   });
 
   it("preserves video_url parts in the raw fetch (not stripped)", async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
-    (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mockClear();
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
 
     const prompt: Prompt = {
       system: "Summarize.",
@@ -123,7 +151,7 @@ describe("streamTextWithModelId video routing", () => {
       forceOpenRouter: true,
     });
 
-    const callArgs = (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    const callArgs = (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     // The video_url part must be present — it should NOT be stripped.
     const videoPartInCall = callArgs.interleavedParts.find(
       (p: { kind: string }) => p.kind === "video_url",
@@ -151,12 +179,12 @@ describe("streamTextWithModelId video routing", () => {
       forceOpenRouter: true,
     });
 
-    // lastError should return null (no error in the fallback path).
+    // lastError should return null (no error in the video streaming path).
     expect(result.lastError()).toBeNull();
   });
 
-  it("does NOT call completeOpenAiTextWithVideo when prompt has no video_url parts", async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
+  it("does NOT call streamOpenAiTextWithVideo when prompt has no video_url parts", async () => {
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
 
     const prompt: Prompt = {
       system: "Summarize.",
@@ -168,7 +196,7 @@ describe("streamTextWithModelId video routing", () => {
     };
 
     // This will try to use pi-ai streamSimple which we haven't mocked,
-    // so it should throw. The key assertion is that completeOpenAiTextWithVideo
+    // so it should throw. The key assertion is that streamOpenAiTextWithVideo
     // is NOT called.
     try {
       await streamTextWithModelId({
@@ -183,11 +211,11 @@ describe("streamTextWithModelId video routing", () => {
       // Expected — pi-ai stream mocking is not set up.
     }
 
-    expect(completeOpenAiTextWithVideo).not.toHaveBeenCalled();
+    expect(streamOpenAiTextWithVideo).not.toHaveBeenCalled();
   });
 
   it("passes multiple video_url parts through to the raw fetch", async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
 
     const prompt: Prompt = {
       system: "Summarize.",
@@ -213,9 +241,9 @@ describe("streamTextWithModelId video routing", () => {
     for await (const chunk of result.textStream) {
       chunks.push(chunk);
     }
-    expect(chunks).toEqual(["Video summary from stream fallback"]);
+    expect(chunks).toEqual(["Video ", "summary ", "from stream"]);
 
-    const callArgs = (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    const callArgs = (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     const videoParts = callArgs.interleavedParts.filter(
       (p: { kind: string }) => p.kind === "video_url",
     );
@@ -224,8 +252,8 @@ describe("streamTextWithModelId video routing", () => {
     expect(videoParts[1].url).toBe("https://youtube.com/watch?v=bbb");
   });
 
-  it("passes temperature and maxOutputTokens to completeOpenAiTextWithVideo", async () => {
-    const { completeOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
+  it("passes temperature, maxOutputTokens, and video timeout to streamOpenAiTextWithVideo", async () => {
+    const { streamOpenAiTextWithVideo } = await import("../src/llm/providers/openai.js");
 
     const prompt: Prompt = {
       system: "Test.",
@@ -247,9 +275,10 @@ describe("streamTextWithModelId video routing", () => {
       forceOpenRouter: true,
     });
 
-    const callArgs = (completeOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    const callArgs = (streamOpenAiTextWithVideo as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(callArgs.temperature).toBe(0.5);
     expect(callArgs.maxOutputTokens).toBe(4096);
-    expect(callArgs.timeoutMs).toBe(30000);
+    // Video timeout is Math.max(30000, VIDEO_MIN_TIMEOUT_MS)
+    expect(callArgs.timeoutMs).toBe(VIDEO_MIN_TIMEOUT_MS);
   });
 });

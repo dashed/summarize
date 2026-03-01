@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isGeminiThinkingModel,
   resolveEffectiveReasoning,
+  VIDEO_MIN_TIMEOUT_MS,
 } from "../src/llm/generate-text.js";
 import { isYouTubeUrl } from "../src/daemon/agent.js";
 
@@ -86,5 +87,16 @@ describe("reasoning + video path detection", () => {
 
   it("non-YouTube URL skips video path", () => {
     expect(isYouTubeUrl("https://example.com/article")).toBe(false);
+  });
+});
+
+describe("VIDEO_MIN_TIMEOUT_MS", () => {
+  it("is 2 minutes (120 000 ms)", () => {
+    expect(VIDEO_MIN_TIMEOUT_MS).toBe(120_000);
+  });
+
+  it("matches the default daemon timeout of 120s", () => {
+    const DEFAULT_DAEMON_TIMEOUT = 120_000;
+    expect(VIDEO_MIN_TIMEOUT_MS).toBe(DEFAULT_DAEMON_TIMEOUT);
   });
 });

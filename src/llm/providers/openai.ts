@@ -303,6 +303,10 @@ export async function completeOpenAiTextWithVideo({
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof maxOutputTokens === "number" ? { max_tokens: maxOutputTokens } : {}),
     ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
+    // Force Google AI Studio — Vertex does not support YouTube video_url parts.
+    ...(openaiConfig.isOpenRouter
+      ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } }
+      : {}),
   };
 
   const controller = new AbortController();
@@ -351,6 +355,177 @@ export async function completeOpenAiTextWithVideo({
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Streaming version of {@link completeOpenAiTextWithVideo}.  Instead of waiting
+ * for the full response, this returns an async iterable of text deltas parsed
+ * from the SSE stream.  This is critical for video+reasoning requests that can
+ * take 3-5+ minutes — streaming avoids both the daemon LLM timeout and the
+ * extension idle timeout.
+ */
+export function streamOpenAiTextWithVideo({
+  modelId,
+  openaiConfig,
+  system,
+  interleavedParts,
+  temperature,
+  maxOutputTokens,
+  reasoning,
+  timeoutMs,
+  fetchImpl,
+}: {
+  modelId: string;
+  openaiConfig: OpenAiClientConfig;
+  system?: string;
+  interleavedParts: PromptPart[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
+  timeoutMs: number;
+  fetchImpl: typeof fetch;
+}): {
+  textStream: AsyncIterable<string>;
+  usage: Promise<LlmTokenUsage | null>;
+} {
+  const baseUrl = openaiConfig.baseURL ?? "https://api.openai.com/v1";
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+
+  // Count part types for logging.
+  const partCounts = { text: 0, image: 0, video_url: 0 };
+  for (const p of interleavedParts) {
+    if (p.kind in partCounts) partCounts[p.kind as keyof typeof partCounts]++;
+  }
+  const videoUrls = interleavedParts
+    .filter((p) => p.kind === "video_url")
+    .map((p) => (p as { url: string }).url);
+  console.error(
+    `[summarize:video] streamOpenAiTextWithVideo: model=${modelId}, ` +
+      `baseUrl=${baseUrl}, parts=[text=${partCounts.text}, image=${partCounts.image}, video=${partCounts.video_url}], ` +
+      `videoUrls=${videoUrls.join(", ")}`,
+  );
+
+  // Build the user message content array.
+  const contentParts: Array<Record<string, unknown>> = [];
+  for (const part of interleavedParts) {
+    if (part.kind === "text") {
+      contentParts.push({ type: "text", text: part.text });
+    } else if (part.kind === "image") {
+      contentParts.push({
+        type: "image_url",
+        image_url: { url: `data:${part.mimeType};base64,${bytesToBase64(part.bytes)}` },
+      });
+    } else if (part.kind === "video_url") {
+      contentParts.push({
+        type: "video_url",
+        video_url: { url: part.url },
+      });
+    }
+  }
+
+  const messages: Array<Record<string, unknown>> = [];
+  if (system) {
+    messages.push({ role: "system", content: system });
+  }
+  messages.push({ role: "user", content: contentParts });
+
+  const payload: Record<string, unknown> = {
+    model: modelId,
+    messages,
+    stream: true,
+    ...(typeof temperature === "number" ? { temperature } : {}),
+    ...(typeof maxOutputTokens === "number" ? { max_tokens: maxOutputTokens } : {}),
+    ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
+    // Force Google AI Studio — Vertex does not support YouTube video_url parts.
+    ...(openaiConfig.isOpenRouter
+      ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } }
+      : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let usageResolve: (v: LlmTokenUsage | null) => void;
+  const usagePromise = new Promise<LlmTokenUsage | null>((res) => {
+    usageResolve = res;
+  });
+
+  const textStream: AsyncIterable<string> = {
+    async *[Symbol.asyncIterator]() {
+      try {
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${openaiConfig.apiKey}`,
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const bodyText = await response.text().catch(() => "");
+          console.error(
+            `[summarize:video] streamOpenAiTextWithVideo ERROR: ${bodyText.slice(0, 500)}`,
+          );
+          throw new Error(`OpenAI API error (${response.status}): ${bodyText}`);
+        }
+        if (!response.body) throw new Error("Missing stream body");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let totalChars = 0;
+        let lastUsage: LlmTokenUsage | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(":")) continue;
+            if (!trimmed.startsWith("data: ")) continue;
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") continue;
+
+            try {
+              const parsed = JSON.parse(data) as {
+                choices?: Array<{ delta?: { content?: string } }>;
+                usage?: unknown;
+              };
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                totalChars += delta.length;
+                yield delta;
+              }
+              if (parsed.usage) {
+                lastUsage = normalizeOpenAiUsage(parsed.usage);
+              }
+            } catch {
+              // skip malformed JSON chunks
+            }
+          }
+        }
+
+        console.error(
+          `[summarize:video] streamOpenAiTextWithVideo completed: totalChars=${totalChars}, ` +
+            `usage=${JSON.stringify(lastUsage)}`,
+        );
+        usageResolve!(lastUsage);
+      } catch (error) {
+        usageResolve!(null);
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  };
+
+  return { textStream, usage: usagePromise };
 }
 
 /**
@@ -409,6 +584,8 @@ export async function getVideoTimestampsFromGemini({
   const payload: Record<string, unknown> = {
     model,
     messages,
+    // Force Google AI Studio — Vertex does not support YouTube video_url parts.
+    provider: { order: ["google-ai-studio"], allow_fallbacks: true },
     response_format: {
       type: "json_schema",
       json_schema: {

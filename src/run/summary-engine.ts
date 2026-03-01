@@ -127,7 +127,8 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       return deps.keyFlags.openrouterConfigured;
     }
     if (requiredEnv === "OPENAI_API_KEY") {
-      return Boolean(deps.apiKeys.openaiApiKey);
+      // OpenRouter can proxy openai/ models, so accept either key.
+      return Boolean(deps.apiKeys.openaiApiKey) || deps.keyFlags.openrouterConfigured;
     }
     if (requiredEnv === "NVIDIA_API_KEY") {
       return Boolean(deps.nvidia.apiKey);

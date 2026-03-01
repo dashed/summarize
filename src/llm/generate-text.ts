@@ -30,6 +30,7 @@ import {
   completeOpenAiDocument,
   completeOpenAiText,
   completeOpenAiTextWithVideo,
+  streamOpenAiTextWithVideo,
   resolveOpenAiClientConfig,
 } from "./providers/openai.js";
 import { extractText } from "./providers/shared.js";
@@ -96,6 +97,13 @@ function promptToContext(prompt: Prompt): Context {
   ];
   return { systemPrompt: prompt.system, messages };
 }
+
+/**
+ * Minimum timeout for video_url requests (2 minutes).  With Google AI Studio
+ * provider routing, video+reasoning requests typically complete in ~10 seconds,
+ * so 2 minutes provides ample safety margin.
+ */
+export const VIDEO_MIN_TIMEOUT_MS = 120_000;
 
 function isRetryableTimeoutError(error: unknown): boolean {
   if (!error) return false;
@@ -354,6 +362,7 @@ export async function generateTextWithModelId({
         openaiBaseUrlOverride,
         forceChatCompletions,
       });
+      const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
       const result = await completeOpenAiTextWithVideo({
         modelId: parsed.model,
         openaiConfig,
@@ -362,7 +371,7 @@ export async function generateTextWithModelId({
         temperature: effectiveTemperature,
         maxOutputTokens,
         reasoning: effectiveReasoning,
-        timeoutMs,
+        timeoutMs: videoTimeoutMs,
         fetchImpl,
       });
       console.error(
@@ -611,10 +620,9 @@ export async function streamTextWithModelId({
   const effectiveReasoning = resolveEffectiveReasoning({ parsed, reasoning });
 
   // When the prompt contains video_url parts and the provider speaks the OpenAI
-  // chat completions protocol (which includes OpenRouter), we fall back to the
-  // non-streaming `completeOpenAiTextWithVideo` raw fetch and wrap its result as
-  // a single-chunk async iterable.  The pi-ai SDK has no VideoContent type so
-  // the streaming path cannot serialise video parts.
+  // chat completions protocol (which includes OpenRouter), use a raw streaming
+  // fetch with video_url content parts.  The pi-ai SDK has no VideoContent type
+  // so the normal streaming path cannot serialise video parts.
   if (hasVideoUrlParts(prompt) && parsed.provider === "openai") {
     const openaiConfig = resolveOpenAiClientConfig({
       apiKeys: {
@@ -631,10 +639,11 @@ export async function streamTextWithModelId({
       .map((p) => (p as { url: string }).url);
     console.error(
       `[summarize:video] streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
-        `falling back to non-streaming raw fetch. URLs: ${videoUrls.join(", ")}`,
+        `using raw streaming fetch. URLs: ${videoUrls.join(", ")}`,
     );
 
-    const result = await completeOpenAiTextWithVideo({
+    const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
+    const streamResult = streamOpenAiTextWithVideo({
       modelId: parsed.model,
       openaiConfig,
       system: prompt.system,
@@ -642,26 +651,15 @@ export async function streamTextWithModelId({
       temperature: effectiveTemperature,
       maxOutputTokens,
       reasoning: effectiveReasoning,
-      timeoutMs,
+      timeoutMs: videoTimeoutMs,
       fetchImpl,
     });
 
-    console.error(
-      `[summarize:video] non-streaming video request completed for ${parsed.canonical}; ` +
-        `response length=${result.text.length} chars`,
-    );
-
-    // Wrap the non-streaming result as a single-chunk async iterable.
-    const textStream: AsyncIterable<string> = {
-      async *[Symbol.asyncIterator]() {
-        yield result.text;
-      },
-    };
     return {
-      textStream,
+      textStream: streamResult.textStream,
       canonicalModelId: parsed.canonical,
       provider: parsed.provider,
-      usage: Promise.resolve(result.usage),
+      usage: streamResult.usage,
       lastError: () => null,
     };
   }

@@ -400,7 +400,25 @@ export async function streamSummaryForUrl({
   });
 
   writeStatus?.("Extracting…");
-  await runUrlFlow({ ctx, url: input.url, isYoutubeUrl: isYouTubeUrl(input.url) });
+
+  // For YouTube video URLs, send periodic status events so the extension's
+  // idle-timeout (120 s) does not fire while the non-streaming video+reasoning
+  // LLM request is in flight.  Real status events (not SSE comments) are needed
+  // because the extension only resets its timer on parsed events.
+  const isYoutube = isYouTubeUrl(input.url);
+  let videoKeepalive: ReturnType<typeof setInterval> | null = null;
+  if (isYoutube && writeStatus) {
+    let tick = 0;
+    videoKeepalive = setInterval(() => {
+      tick++;
+      writeStatus?.(`Processing video… (${tick * 30}s)`);
+    }, 30_000);
+  }
+  try {
+    await runUrlFlow({ ctx, url: input.url, isYoutubeUrl: isYoutube });
+  } finally {
+    if (videoKeepalive) clearInterval(videoKeepalive);
+  }
 
   const extracted = extractedRef.value;
   if (!extracted) {

@@ -652,12 +652,17 @@ async function streamAgentWithVideo({
     `[summarize:agent-video] streamAgentWithVideo: model=${modelId}, videoUrl=${videoUrl}`,
   );
 
+  const isOpenRouter = /openrouter\.ai/i.test(baseUrl);
   const payload = {
     model: modelId,
     messages: oaiMessages,
     max_tokens: maxOutputTokens,
     stream: true,
     ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
+    // Force Google AI Studio — Vertex does not support YouTube video_url parts.
+    ...(isOpenRouter
+      ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } }
+      : {}),
   };
 
   const response = await fetch(url, {

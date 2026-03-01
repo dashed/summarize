@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PromptPart } from "../src/llm/prompt.js";
-import { completeOpenAiTextWithVideo } from "../src/llm/providers/openai.js";
+import { completeOpenAiTextWithVideo, streamOpenAiTextWithVideo } from "../src/llm/providers/openai.js";
 
 describe("completeOpenAiTextWithVideo", () => {
   const makeConfig = (overrides?: { baseURL?: string; isOpenRouter?: boolean }) => ({
@@ -212,5 +212,139 @@ describe("completeOpenAiTextWithVideo", () => {
     const body = capturedBody as Record<string, unknown>;
     expect(body).not.toHaveProperty("temperature");
     expect(body).not.toHaveProperty("max_tokens");
+  });
+
+  it("includes provider routing for Google AI Studio when isOpenRouter is true", async () => {
+    let capturedBody: unknown = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
+        { status: 200 },
+      );
+    });
+
+    await completeOpenAiTextWithVideo({
+      modelId: "google/gemini-3-flash-preview",
+      openaiConfig: makeConfig({ isOpenRouter: true }),
+      interleavedParts: [
+        { kind: "text", text: "Hello" },
+        { kind: "video_url", url: "https://youtube.com/watch?v=abc" },
+      ],
+      timeoutMs: 5000,
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    const body = capturedBody as Record<string, unknown>;
+    expect(body.provider).toEqual({
+      order: ["google-ai-studio"],
+      allow_fallbacks: true,
+    });
+  });
+
+  it("omits provider routing when isOpenRouter is false", async () => {
+    let capturedBody: unknown = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
+        { status: 200 },
+      );
+    });
+
+    await completeOpenAiTextWithVideo({
+      modelId: "test-model",
+      openaiConfig: makeConfig({ isOpenRouter: false }),
+      interleavedParts: [{ kind: "text", text: "Hello" }],
+      timeoutMs: 5000,
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    const body = capturedBody as Record<string, unknown>;
+    expect(body).not.toHaveProperty("provider");
+  });
+});
+
+describe("streamOpenAiTextWithVideo provider routing", () => {
+  const makeConfig = (overrides?: { baseURL?: string; isOpenRouter?: boolean }) => ({
+    apiKey: "test-key",
+    baseURL: overrides?.baseURL ?? "https://openrouter.ai/api/v1",
+    useChatCompletions: true,
+    isOpenRouter: overrides?.isOpenRouter ?? true,
+  });
+
+  it("includes provider routing for Google AI Studio when isOpenRouter is true", async () => {
+    let capturedBody: unknown = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      // Return a streaming response with a single chunk.
+      const encoder = new TextEncoder();
+      const body = encoder.encode(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }] })}\n\ndata: [DONE]\n\n`,
+      );
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(body);
+          controller.close();
+        },
+      }), { status: 200 });
+    });
+
+    const result = streamOpenAiTextWithVideo({
+      modelId: "google/gemini-3-flash-preview",
+      openaiConfig: makeConfig({ isOpenRouter: true }),
+      interleavedParts: [
+        { kind: "text", text: "Hello" },
+        { kind: "video_url", url: "https://youtube.com/watch?v=abc" },
+      ],
+      timeoutMs: 5000,
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    // Consume the stream to trigger the fetch.
+    const chunks: string[] = [];
+    for await (const chunk of result.textStream) {
+      chunks.push(chunk);
+    }
+
+    expect(capturedBody).not.toBeNull();
+    const body = capturedBody as Record<string, unknown>;
+    expect(body.provider).toEqual({
+      order: ["google-ai-studio"],
+      allow_fallbacks: true,
+    });
+  });
+
+  it("omits provider routing when isOpenRouter is false", async () => {
+    let capturedBody: unknown = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = JSON.parse(init?.body as string);
+      const encoder = new TextEncoder();
+      const body = encoder.encode(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }] })}\n\ndata: [DONE]\n\n`,
+      );
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(body);
+          controller.close();
+        },
+      }), { status: 200 });
+    });
+
+    const result = streamOpenAiTextWithVideo({
+      modelId: "test-model",
+      openaiConfig: makeConfig({ isOpenRouter: false }),
+      interleavedParts: [{ kind: "text", text: "Hello" }],
+      timeoutMs: 5000,
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of result.textStream) {
+      chunks.push(chunk);
+    }
+
+    const body = capturedBody as Record<string, unknown>;
+    expect(body).not.toHaveProperty("provider");
   });
 });
