@@ -766,7 +766,7 @@ export async function runDaemonServer({
               await fs.writeFile(cookiesFilePath, cookiesRaw, "utf8");
             }
             const requestCache: CacheState = noCache
-              ? { ...cacheState, mode: "bypass" as const, store: null }
+              ? { ...cacheState, mode: "bypass" as const }
               : cacheState;
             const runId = randomUUID();
             const { extracted, slides } = await runWithProcessContext(
@@ -969,7 +969,7 @@ export async function runDaemonServer({
               modelOverride && modelOverride.toLowerCase() !== "auto" ? modelOverride : null;
 
             const requestCache: CacheState = noCache
-              ? { ...cacheState, mode: "bypass" as const, store: null }
+              ? { ...cacheState, mode: "bypass" as const }
               : cacheState;
             let liveSlides: SlideExtractionResult | null = null;
 

@@ -474,14 +474,18 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
     };
   })();
 
-  const cacheStore =
+  const cacheStoreForRead =
     ctx.cache.mode === "default" && !ctx.summaryCacheBypass ? ctx.cache.store : null;
+  // Always allow writes when the store is available (even in bypass/refresh mode)
+  // so that fresh summaries are persisted with metadata for future use.
+  const cacheStoreForWrite = ctx.cache.store ?? null;
+  const hasCacheStore = cacheStoreForRead || cacheStoreForWrite;
   const contentBlock = extractTaggedBlock(promptText, "content");
   const contentHash =
-    cacheStore && contentBlock && contentBlock.trim().length > 0
+    hasCacheStore && contentBlock && contentBlock.trim().length > 0
       ? hashString(normalizeContentForHash(contentBlock))
       : null;
-  const promptHash = cacheStore ? buildPromptHash(promptText) : null;
+  const promptHash = hasCacheStore ? buildPromptHash(promptText) : null;
   const lengthKey = buildLengthKey(ctx.lengthArg);
   const languageKey = buildLanguageKey(ctx.outputLanguage);
   const autoSelectionCacheModel = ctx.isFallbackModel
@@ -493,7 +497,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
   let summaryFromCache = false;
   let cacheChecked = false;
 
-  if (cacheStore && contentHash && promptHash) {
+  if (cacheStoreForRead && contentHash && promptHash) {
     cacheChecked = true;
     if (autoSelectionCacheModel) {
       const key = buildSummaryCacheKey({
@@ -503,7 +507,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         lengthKey,
         languageKey,
       });
-      const cached = cacheStore.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
+      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
       const cachedSummary =
         cached && typeof cached.summary === "string" ? cached.summary.trim() : null;
       const cachedModelId = cached && typeof cached.model === "string" ? cached.model.trim() : null;
@@ -549,7 +553,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
           lengthKey,
           languageKey,
         });
-        const cached = cacheStore.getText("summary", key);
+        const cached = cacheStoreForRead.getText("summary", key);
         if (!cached) continue;
         writeVerbose(ctx.stderr, ctx.verbose, "cache hit summary", ctx.verboseColor, ctx.envForRun);
         args.onModelChosen?.(attempt.userModelId);
@@ -668,7 +672,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
     throw new Error("No model available for this input");
   }
 
-  if (!summaryFromCache && cacheStore && contentHash && promptHash) {
+  if (!summaryFromCache && cacheStoreForWrite && contentHash && promptHash) {
     const perModelKey = buildSummaryCacheKey({
       contentHash,
       promptHash,
@@ -681,7 +685,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       length: lengthKey,
       language: languageKey,
     };
-    cacheStore.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs, cacheMeta);
+    cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs, cacheMeta);
     writeVerbose(ctx.stderr, ctx.verbose, "cache write summary", ctx.verboseColor, ctx.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({
@@ -691,7 +695,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         lengthKey,
         languageKey,
       });
-      cacheStore.setJson(
+      cacheStoreForWrite.setJson(
         "summary",
         selectionKey,
         { summary: summaryResult.summary, model: usedAttempt.userModelId },

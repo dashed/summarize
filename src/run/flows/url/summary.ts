@@ -903,10 +903,16 @@ export async function summarizeExtractedUrl({
     ];
   })();
 
-  const cacheStore =
+  const cacheStoreForRead =
     cacheState.mode === "default" && !flags.summaryCacheBypass ? cacheState.store : null;
-  const contentHash = cacheStore ? hashString(normalizeContentForHash(extracted.content)) : null;
-  const promptHash = cacheStore ? buildPromptHash(prompt) : null;
+  // Always allow writes when the store is available (even in bypass/refresh mode)
+  // so that fresh summaries are persisted with metadata for future use.
+  const cacheStoreForWrite = cacheState.store ?? null;
+  const hasCacheStore = cacheStoreForRead || cacheStoreForWrite;
+  const contentHash = hasCacheStore
+    ? hashString(normalizeContentForHash(extracted.content))
+    : null;
+  const promptHash = hasCacheStore ? buildPromptHash(prompt) : null;
   const lengthKey = buildLengthKey(flags.lengthArg);
   const languageKey = buildLanguageKey(flags.outputLanguage);
   const autoSelectionCacheModel = model.isFallbackModel
@@ -957,7 +963,7 @@ export async function summarizeExtractedUrl({
     return;
   }
 
-  if (cacheStore && contentHash && promptHash) {
+  if (cacheStoreForRead && contentHash && promptHash) {
     cacheChecked = true;
     if (autoSelectionCacheModel) {
       const key = buildSummaryCacheKey({
@@ -967,7 +973,7 @@ export async function summarizeExtractedUrl({
         lengthKey,
         languageKey,
       });
-      const cached = cacheStore.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
+      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
       const cachedSummary =
         cached && typeof cached.summary === "string" ? cached.summary.trim() : null;
       const cachedModelId = cached && typeof cached.model === "string" ? cached.model.trim() : null;
@@ -1013,7 +1019,7 @@ export async function summarizeExtractedUrl({
           lengthKey,
           languageKey,
         });
-        const cached = cacheStore.getText("summary", key);
+        const cached = cacheStoreForRead.getText("summary", key);
         if (!cached) continue;
         writeVerbose(
           io.stderr,
@@ -1137,7 +1143,7 @@ export async function summarizeExtractedUrl({
     return;
   }
 
-  if (!summaryFromCache && cacheStore && contentHash && promptHash) {
+  if (!summaryFromCache && cacheStoreForWrite && contentHash && promptHash) {
     const perModelKey = buildSummaryCacheKey({
       contentHash,
       promptHash,
@@ -1151,7 +1157,7 @@ export async function summarizeExtractedUrl({
       language: languageKey,
       url,
     };
-    cacheStore.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs, cacheMeta);
+    cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs, cacheMeta);
     writeVerbose(io.stderr, flags.verbose, "cache write summary", flags.verboseColor, io.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({
@@ -1161,7 +1167,7 @@ export async function summarizeExtractedUrl({
         lengthKey,
         languageKey,
       });
-      cacheStore.setJson(
+      cacheStoreForWrite.setJson(
         "summary",
         selectionKey,
         { summary: summaryResult.summary, model: usedAttempt.userModelId },
