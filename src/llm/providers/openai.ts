@@ -254,6 +254,20 @@ export async function completeOpenAiTextWithVideo({
   const baseUrl = openaiConfig.baseURL ?? "https://api.openai.com/v1";
   const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
 
+  // Count part types for logging.
+  const partCounts = { text: 0, image: 0, video_url: 0 };
+  for (const p of interleavedParts) {
+    if (p.kind in partCounts) partCounts[p.kind as keyof typeof partCounts]++;
+  }
+  const videoUrls = interleavedParts
+    .filter((p) => p.kind === "video_url")
+    .map((p) => (p as { url: string }).url);
+  console.error(
+    `[summarize:video] completeOpenAiTextWithVideo: model=${modelId}, ` +
+      `baseUrl=${baseUrl}, parts=[text=${partCounts.text}, image=${partCounts.image}, video=${partCounts.video_url}], ` +
+      `videoUrls=${videoUrls.join(", ")}`,
+  );
+
   // Build the user message content array with text, image_url, and video_url parts.
   const contentParts: Array<Record<string, unknown>> = [];
   for (const part of interleavedParts) {
@@ -300,7 +314,14 @@ export async function completeOpenAiTextWithVideo({
     });
 
     const bodyText = await response.text();
+    console.error(
+      `[summarize:video] completeOpenAiTextWithVideo response: status=${response.status}, ` +
+        `bodyLength=${bodyText.length} chars`,
+    );
     if (!response.ok) {
+      console.error(
+        `[summarize:video] completeOpenAiTextWithVideo ERROR: ${bodyText.slice(0, 500)}`,
+      );
       const error = new Error(`OpenAI API error (${response.status}): ${bodyText}`);
       (error as { statusCode?: number }).statusCode = response.status;
       (error as { responseBody?: string }).responseBody = bodyText;
@@ -315,7 +336,12 @@ export async function completeOpenAiTextWithVideo({
     if (!text) {
       throw new Error(`LLM returned an empty summary (model openai/${modelId}).`);
     }
-    return { text, usage: normalizeOpenAiUsage(data.usage) };
+    const usage = normalizeOpenAiUsage(data.usage);
+    console.error(
+      `[summarize:video] completeOpenAiTextWithVideo success: responseChars=${text.length}, ` +
+        `usage=${JSON.stringify(usage)}`,
+    );
+    return { text, usage };
   } finally {
     clearTimeout(timeout);
   }

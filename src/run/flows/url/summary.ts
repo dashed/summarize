@@ -228,6 +228,10 @@ export async function buildMultimodalSlidesPrompt({
   preset: "short" | "medium" | "long" | "xl" | "xxl";
   sourceUrl?: string;
 }): Promise<PromptPart[] | null> {
+  console.error(
+    `[summarize:video] buildMultimodalSlidesPrompt: slides=${slides ? `${slides.slides.length} slides` : "null"}, ` +
+      `sourceUrl=${sourceUrl ?? "none"}`,
+  );
   if (!slides || slides.slides.length === 0) return null;
 
   const chapters: VideoChapter[] = slides.chapters ?? [];
@@ -256,6 +260,7 @@ export async function buildMultimodalSlidesPrompt({
   // Build the interleaved parts: text prompt, optional video URL, then per-slide text+image pairs.
   const parts: PromptPart[] = [{ kind: "text", text: promptText }];
   if (sourceUrl) {
+    console.error(`[summarize:video] buildMultimodalSlidesPrompt: injecting video_url=${sourceUrl}`);
     parts.push({ kind: "video_url", url: sourceUrl });
   }
 
@@ -762,6 +767,10 @@ export async function summarizeExtractedUrl({
   const preset = flags.lengthArg.kind === "preset" ? flags.lengthArg.preset : "medium";
   const envVideo = io.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
   const videoEnabled = (envVideo === "true" || envVideo === "1") && isYouTubeUrl(url);
+  console.error(
+    `[summarize:video] summarizeExtractedUrl: SUMMARIZE_SLIDES_VIDEO=${envVideo ?? "unset"}, ` +
+      `isYouTubeUrl=${isYouTubeUrl(url)}, videoEnabled=${videoEnabled}, url=${url}`,
+  );
   const interleavedParts = await buildMultimodalSlidesPrompt({
     promptText: prompt,
     slides,

@@ -315,6 +315,13 @@ export async function generateTextWithModelId({
   // OpenAI-compatible APIs (including OpenRouter).  For other providers we
   // strip the video parts and fall through to the normal path.
   if (hasVideoUrlParts(prompt)) {
+    const videoUrls = prompt.interleavedParts!
+      .filter((p) => p.kind === "video_url")
+      .map((p) => (p as { url: string }).url);
+    console.error(
+      `[summarize:video] non-streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
+        `provider=${parsed.provider}. URLs: ${videoUrls.join(", ")}`,
+    );
     if (parsed.provider === "openai") {
       const openaiConfig = resolveOpenAiClientConfig({
         apiKeys: {
@@ -335,6 +342,10 @@ export async function generateTextWithModelId({
         timeoutMs,
         fetchImpl,
       });
+      console.error(
+        `[summarize:video] non-streaming video request completed for ${parsed.canonical}; ` +
+          `response length=${result.text.length} chars`,
+      );
       return {
         text: result.text,
         canonicalModelId: parsed.canonical,
@@ -343,6 +354,9 @@ export async function generateTextWithModelId({
       };
     }
     // For non-OpenAI providers, strip video_url parts and continue with normal path.
+    console.error(
+      `[summarize:video] stripping video_url parts for non-openai provider ${parsed.provider}/${parsed.model}`,
+    );
     const strippedParts = prompt.interleavedParts
       ? stripVideoUrlParts(prompt.interleavedParts)
       : undefined;
@@ -564,8 +578,71 @@ export async function streamTextWithModelId({
   usage: Promise<LlmTokenUsage | null>;
   lastError: () => unknown;
 }> {
-  // Strip video_url parts for streaming — video is only supported via the raw
-  // non-streaming fetch path in generateTextWithModelId.
+  const parsed = parseGatewayStyleModelId(modelId);
+  const effectiveTemperature = resolveEffectiveTemperature({ parsed, temperature });
+
+  // When the prompt contains video_url parts and the provider speaks the OpenAI
+  // chat completions protocol (which includes OpenRouter), we fall back to the
+  // non-streaming `completeOpenAiTextWithVideo` raw fetch and wrap its result as
+  // a single-chunk async iterable.  The pi-ai SDK has no VideoContent type so
+  // the streaming path cannot serialise video parts.
+  if (hasVideoUrlParts(prompt) && parsed.provider === "openai") {
+    const openaiConfig = resolveOpenAiClientConfig({
+      apiKeys: {
+        openaiApiKey: apiKeys.openaiApiKey,
+        openrouterApiKey: apiKeys.openrouterApiKey,
+      },
+      forceOpenRouter,
+      openaiBaseUrlOverride,
+      forceChatCompletions,
+    });
+
+    const videoUrls = prompt.interleavedParts!
+      .filter((p) => p.kind === "video_url")
+      .map((p) => (p as { url: string }).url);
+    console.error(
+      `[summarize:video] streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
+        `falling back to non-streaming raw fetch. URLs: ${videoUrls.join(", ")}`,
+    );
+
+    const result = await completeOpenAiTextWithVideo({
+      modelId: parsed.model,
+      openaiConfig,
+      system: prompt.system,
+      interleavedParts: prompt.interleavedParts!,
+      temperature: effectiveTemperature,
+      maxOutputTokens,
+      timeoutMs,
+      fetchImpl,
+    });
+
+    console.error(
+      `[summarize:video] non-streaming video request completed for ${parsed.canonical}; ` +
+        `response length=${result.text.length} chars`,
+    );
+
+    // Wrap the non-streaming result as a single-chunk async iterable.
+    const textStream: AsyncIterable<string> = {
+      async *[Symbol.asyncIterator]() {
+        yield result.text;
+      },
+    };
+    return {
+      textStream,
+      canonicalModelId: parsed.canonical,
+      provider: parsed.provider,
+      usage: Promise.resolve(result.usage),
+      lastError: () => null,
+    };
+  }
+
+  // For non-openai providers (or prompts without video), strip video_url parts
+  // (which the pi-ai SDK cannot serialise) and continue with normal streaming.
+  if (hasVideoUrlParts(prompt)) {
+    console.error(
+      `[summarize:video] stripping video_url parts for non-openai provider ${parsed.provider}/${parsed.model}`,
+    );
+  }
   const effectivePrompt = hasVideoUrlParts(prompt)
     ? { ...prompt, interleavedParts: stripVideoUrlParts(prompt.interleavedParts!) }
     : prompt;

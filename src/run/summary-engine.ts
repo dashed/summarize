@@ -293,15 +293,41 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
     // Strip video_url parts from interleaved content when video input is
     // disabled via SUMMARIZE_SLIDES_VIDEO=false (or the model is text-only).
     const promptAfterVideoGating: Prompt = (() => {
-      if (!hasVideoUrlParts(effectivePrompt)) return effectivePrompt;
+      const hasVideo = hasVideoUrlParts(effectivePrompt);
+      if (!hasVideo) return effectivePrompt;
       const envVideo = deps.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
       const videoDisabled = envVideo === "false" || envVideo === "0";
+      const videoUrls = effectivePrompt.interleavedParts
+        ?.filter((p) => p.kind === "video_url")
+        .map((p) => (p as { url: string }).url) ?? [];
       if (videoDisabled) {
+        writeVerbose(
+          deps.stderr,
+          deps.verbose,
+          `video gating: stripping ${videoUrls.length} video_url part(s) (SUMMARIZE_SLIDES_VIDEO=${envVideo})`,
+          deps.verboseColor,
+          deps.envForRun,
+        );
+        console.error(
+          `[summarize:video] video gating DISABLED (SUMMARIZE_SLIDES_VIDEO=${envVideo}); ` +
+            `stripping ${videoUrls.length} video_url part(s)`,
+        );
         const stripped = effectivePrompt.interleavedParts
           ? stripVideoUrlParts(effectivePrompt.interleavedParts)
           : undefined;
         return { ...effectivePrompt, interleavedParts: stripped };
       }
+      writeVerbose(
+        deps.stderr,
+        deps.verbose,
+        `video gating: passing ${videoUrls.length} video_url part(s) to LLM: ${videoUrls.join(", ")}`,
+        deps.verboseColor,
+        deps.envForRun,
+      );
+      console.error(
+        `[summarize:video] video gating ENABLED (SUMMARIZE_SLIDES_VIDEO=${envVideo ?? "unset"}); ` +
+          `passing ${videoUrls.length} video_url part(s): ${videoUrls.join(", ")}`,
+      );
       return effectivePrompt;
     })();
 
