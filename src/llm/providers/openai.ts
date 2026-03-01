@@ -107,6 +107,7 @@ export async function completeOpenAiText({
   context,
   temperature,
   maxOutputTokens,
+  reasoning,
   signal,
 }: {
   modelId: string;
@@ -114,12 +115,14 @@ export async function completeOpenAiText({
   context: Context;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   signal: AbortSignal;
 }): Promise<{ text: string; usage: LlmTokenUsage | null }> {
   const model = resolveOpenAiModel({ modelId, context, openaiConfig });
   const result = await completeSimple(model, context, {
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+    ...(reasoning ? { reasoning } : {}),
     apiKey: openaiConfig.apiKey,
     signal,
   });
@@ -239,6 +242,7 @@ export async function completeOpenAiTextWithVideo({
   interleavedParts,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
 }: {
@@ -248,6 +252,7 @@ export async function completeOpenAiTextWithVideo({
   interleavedParts: PromptPart[];
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
 }): Promise<{ text: string; usage: LlmTokenUsage | null }> {
@@ -297,6 +302,7 @@ export async function completeOpenAiTextWithVideo({
     messages,
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof maxOutputTokens === "number" ? { max_tokens: maxOutputTokens } : {}),
+    ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
   };
 
   const controller = new AbortController();

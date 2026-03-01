@@ -175,12 +175,32 @@ function resolveEffectiveTemperature({
   return temperature;
 }
 
+/** Models that support and benefit from reasoning/thinking tokens. */
+export function isGeminiThinkingModel(model: string): boolean {
+  return model.includes("gemini-3") || model.includes("gemini-2.5-flash");
+}
+
+export type ReasoningLevel = "minimal" | "low" | "medium" | "high";
+
+export function resolveEffectiveReasoning({
+  parsed,
+  reasoning,
+}: {
+  parsed: { model: string };
+  reasoning?: ReasoningLevel;
+}): ReasoningLevel | undefined {
+  if (reasoning) return reasoning;
+  if (isGeminiThinkingModel(parsed.model)) return "high";
+  return undefined;
+}
+
 export async function generateTextWithModelId({
   modelId,
   apiKeys,
   prompt,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -197,6 +217,7 @@ export async function generateTextWithModelId({
   prompt: Prompt;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -215,6 +236,7 @@ export async function generateTextWithModelId({
 }> {
   const parsed = parseGatewayStyleModelId(modelId);
   const effectiveTemperature = resolveEffectiveTemperature({ parsed, temperature });
+  const effectiveReasoning = resolveEffectiveReasoning({ parsed, reasoning });
 
   const attachments = prompt.attachments ?? [];
   const documentAttachment =
@@ -339,6 +361,7 @@ export async function generateTextWithModelId({
         interleavedParts: prompt.interleavedParts!,
         temperature: effectiveTemperature,
         maxOutputTokens,
+        reasoning: effectiveReasoning,
         timeoutMs,
         fetchImpl,
       });
@@ -388,6 +411,7 @@ export async function generateTextWithModelId({
     const result = await completeSimple(model, context, {
       ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
       ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+      ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
       apiKey,
       signal,
     });
@@ -416,6 +440,7 @@ export async function generateTextWithModelId({
             ? { temperature: effectiveTemperature }
             : {}),
           ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+          ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
           apiKey,
           signal: controller.signal,
         });
@@ -506,6 +531,7 @@ export async function generateTextWithModelId({
           context,
           temperature: effectiveTemperature,
           maxOutputTokens,
+          reasoning: effectiveReasoning,
           signal: controller.signal,
         });
         return {
@@ -549,6 +575,7 @@ export async function streamTextWithModelId({
   prompt,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -563,6 +590,7 @@ export async function streamTextWithModelId({
   prompt: Prompt;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -580,6 +608,7 @@ export async function streamTextWithModelId({
 }> {
   const parsed = parseGatewayStyleModelId(modelId);
   const effectiveTemperature = resolveEffectiveTemperature({ parsed, temperature });
+  const effectiveReasoning = resolveEffectiveReasoning({ parsed, reasoning });
 
   // When the prompt contains video_url parts and the provider speaks the OpenAI
   // chat completions protocol (which includes OpenRouter), we fall back to the
@@ -612,6 +641,7 @@ export async function streamTextWithModelId({
       interleavedParts: prompt.interleavedParts!,
       temperature: effectiveTemperature,
       maxOutputTokens,
+      reasoning: effectiveReasoning,
       timeoutMs,
       fetchImpl,
     });
@@ -653,6 +683,7 @@ export async function streamTextWithModelId({
     context,
     temperature,
     maxOutputTokens,
+    reasoning: effectiveReasoning,
     timeoutMs,
     fetchImpl,
     forceOpenRouter,
@@ -670,6 +701,7 @@ export async function streamTextWithContext({
   context,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -684,6 +716,7 @@ export async function streamTextWithContext({
   context: Context;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -784,6 +817,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -822,6 +856,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -857,6 +892,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -919,6 +955,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey: openaiConfig.apiKey,
         signal: controller.signal,
       });

@@ -596,6 +596,7 @@ async function streamAgentWithVideo({
   messages,
   videoUrl,
   maxOutputTokens,
+  reasoning,
   signal,
   onChunk,
 }: {
@@ -606,6 +607,7 @@ async function streamAgentWithVideo({
   messages: Message[];
   videoUrl: string;
   maxOutputTokens: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   signal?: AbortSignal;
   onChunk: (text: string) => void;
 }): Promise<string> {
@@ -655,6 +657,7 @@ async function streamAgentWithVideo({
     messages: oaiMessages,
     max_tokens: maxOutputTokens,
     stream: true,
+    ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
   };
 
   const response = await fetch(url, {
@@ -758,6 +761,7 @@ export async function streamAgentResponse({
     pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+  const reasoning = model.reasoning ? ("high" as const) : undefined;
 
   // For YouTube videos on OpenRouter (Gemini) without automation tools,
   // use a raw streaming fetch that includes the video_url multimodal part.
@@ -778,6 +782,7 @@ export async function streamAgentResponse({
       messages: normalizedMessages,
       videoUrl: pageUrl,
       maxOutputTokens,
+      reasoning,
       signal,
       onChunk,
     });
@@ -806,6 +811,7 @@ export async function streamAgentResponse({
     },
     {
       maxTokens: maxOutputTokens,
+      ...(reasoning ? { reasoning } : {}),
       apiKey,
       signal,
     },
@@ -875,6 +881,7 @@ export async function completeAgentResponse({
     pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+  const reasoning = model.reasoning ? ("high" as const) : undefined;
 
   // For YouTube videos on OpenRouter (Gemini) without automation tools,
   // use a raw fetch that includes the video_url multimodal part.
@@ -893,6 +900,7 @@ export async function completeAgentResponse({
       messages: normalizedMessages,
       videoUrl: pageUrl,
       maxOutputTokens,
+      reasoning,
       onChunk: (text) => { fullText += text; },
     });
 
@@ -917,6 +925,7 @@ export async function completeAgentResponse({
     },
     {
       maxTokens: maxOutputTokens,
+      ...(reasoning ? { reasoning } : {}),
       apiKey,
     },
   );
