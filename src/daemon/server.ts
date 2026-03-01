@@ -4,7 +4,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import type { CacheState } from "../cache.js";
+import { hashString, type CacheState } from "../cache.js";
 import type { SlideExtractionResult, SlideSettings } from "../slides/index.js";
 import type { DaemonConfig } from "./config.js";
 import { loadSummarizeConfig } from "../config.js";
@@ -1633,6 +1633,101 @@ export async function runDaemonServer({
           clearInterval(keepalive);
           session.clients.delete(res);
         });
+        return;
+      }
+
+      // ── History & chat persistence endpoints ──────────────────────────
+
+      if (req.method === "GET" && pathname === "/v1/history/summaries") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
+        const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, summaries: [] }, cors);
+          return;
+        }
+        const entries = store.listEntries("summary", { limit, offset });
+        json(res, 200, { ok: true, summaries: entries }, cors);
+        return;
+      }
+
+      const summaryKeyMatch = pathname.match(/^\/v1\/history\/summaries\/(.+)$/);
+      if (req.method === "GET" && summaryKeyMatch) {
+        const key = decodeURIComponent(summaryKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const entry = store.getEntryWithMeta("summary", key);
+        if (!entry) {
+          json(res, 404, { ok: false, error: "Summary not found" }, cors);
+          return;
+        }
+        json(res, 200, { ok: true, ...entry }, cors);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/agent/history") {
+        const body = await readJsonBody(req, 1_000_000);
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "Invalid body" }, cors);
+          return;
+        }
+        const { url: bodyUrl, automationEnabled } = body as Record<string, unknown>;
+        if (!bodyUrl) {
+          json(res, 400, { ok: false, error: "Missing url" }, cors);
+          return;
+        }
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, messages: [] }, cors);
+          return;
+        }
+        const key = hashString(JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }));
+        const messages = store.getJson<unknown[]>("chat", key);
+        json(res, 200, { ok: true, messages: messages ?? [] }, cors);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/agent/history/save") {
+        const body = await readJsonBody(req, 2_000_000);
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "Invalid body" }, cors);
+          return;
+        }
+        const { url: bodyUrl, title, automationEnabled, messages, model } = body as Record<string, unknown>;
+        if (!bodyUrl || !Array.isArray(messages)) {
+          json(res, 400, { ok: false, error: "Missing url or messages" }, cors);
+          return;
+        }
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const key = hashString(JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }));
+        const metadata = {
+          url: bodyUrl,
+          title: title ?? null,
+          model: model ?? null,
+          messageCount: messages.length,
+        };
+        store.setJson("chat", key, messages, cacheState.ttlMs, metadata);
+        json(res, 200, { ok: true }, cors);
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/history/chats") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
+        const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, chats: [] }, cors);
+          return;
+        }
+        const entries = store.listEntries("chat", { limit, offset });
+        json(res, 200, { ok: true, chats: entries }, cors);
         return;
       }
 

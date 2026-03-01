@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (25 commits ahead of upstream)
+**Version:** `0.11.2-fork` (27 commits ahead of upstream)
 
 ---
 
@@ -97,7 +97,26 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ---
 
-### 6. Debug/Logging Infrastructure
+### 6. Summary History and Chat Persistence
+
+- **`listEntries()` on CacheStore** — New method to query cached entries by kind with pagination and sort order. Filters expired entries, parses metadata JSON
+- **`getEntryWithMeta()`** — Fetch a single cache entry with its full value, created_at timestamp, and parsed metadata
+- **Summary history API** — `GET /v1/history/summaries` lists cached summaries (metadata only), `GET /v1/history/summaries/:key` returns full summary text
+- **Chat session persistence** — `POST /v1/agent/history/save` persists chat messages to SQLite with metadata (url, title, model, messageCount). `POST /v1/agent/history` loads chat sessions back (was previously unimplemented, returning 404)
+- **Chat history listing** — `GET /v1/history/chats` lists saved chat sessions
+- **History panel UI** — Clock icon button in sidepanel header opens a history panel with Summaries/Chats tabs, scrollable list of past entries with title, date, model badge, and char count. Click to load a previous summary
+- **Auto-save chat to daemon** — Chat sessions auto-saved to daemon SQLite (fire-and-forget) after each assistant response, surviving browser restarts
+
+**Key files:**
+- `src/cache.ts` — `listEntries()`, `getEntryWithMeta()`, `CacheEntryInfo` type
+- `src/daemon/server.ts` — History and chat persistence endpoints
+- `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — History panel logic, chat save
+- `apps/chrome-extension/src/entrypoints/sidepanel/index.html` — History button and panel HTML
+- `apps/chrome-extension/src/entrypoints/sidepanel/style.css` — History panel styles
+
+---
+
+### 7. Debug/Logging Infrastructure
 
 - **Request dump system** — Full LLM request payloads saved to `~/.summarize/debug/` as JSON with ready-to-paste curl replay commands. Gated behind `SUMMARIZE_DEBUG_DUMP=true`
 - **`[video-debug]` logging** — Prefixed logs throughout the pipeline for `journalctl | grep video-debug` filtering
@@ -110,7 +129,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-25 commits ahead of upstream, oldest to newest:
+27 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -138,7 +157,9 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 22 | `ea9c0d5` | feat: enrich cache metadata with prompt, settings, and input stats | Cache |
 | 23 | `5542f3d` | feat: reframe prompts from summarization to content extraction for video | Prompts |
 | 24 | `a1e5eac` | docs: add FORK.md documenting all fork changes | Docs |
-| 25 | | fix: auto-restore summaries on tab switch back | Extension Fix |
+| 25 | `a889c01` | fix: auto-restore summaries on tab switch back | Extension Fix |
+| 26 | | feat: add summary history and chat session persistence | History |
+| 27 | | test: add cache list and history API tests | Tests |
 
 ---
 
@@ -166,6 +187,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/cache.store.test.ts` — Cache store e2e tests
 - `tests/chrome-extension/progress-stages.test.ts` — Progress stage resolution
 - `tests/sidepanel.panel-cache.test.ts` — Panel cache controller and tab-switch restore logic
+- `tests/cache.list-entries.test.ts` — Cache listEntries and getEntryWithMeta
+- `tests/daemon.history-api.test.ts` — History API endpoint cache operations
 
 ## Architecture Decisions
 
@@ -177,3 +200,4 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 6. **Provider routing forced to Google AI Studio** — Vertex doesn't support YouTube video_url parts; OpenRouter provider routing enforces this
 7. **Content extraction vs summarization** — Video prompts reframed from "summarize" to "extract into readable text with timestamps" for better output quality
 8. **Tab-switch SSE reconnect** — Save panel cache before aborting streams, then reconnect to daemon's SSE replay buffer on tab switch back for seamless restore
+9. **Summary/chat history via existing cache** — Reuses the `cache_entries` SQLite table with `listEntries()` queries rather than adding new tables. Chat sessions keyed by URL+automationEnabled hash using the reserved `"chat"` CacheKind

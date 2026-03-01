@@ -2611,6 +2611,131 @@ button.setup__pill.isActive {
   white-space: nowrap;
 }
 
+/* ── History panel ──────────────────────────────── */
+
+.historyPanel {
+  position: sticky;
+  top: var(--header-height, 56px);
+  z-index: 9;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px 12px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.historyTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.historyTabs {
+  display: flex;
+  gap: 4px;
+}
+
+.historyTab {
+  font-size: 11px;
+  padding: 4px 8px;
+  min-height: 24px;
+}
+
+.historyTab.active {
+  border-color: color-mix(in srgb, var(--ui-focus) 55%, var(--btn-border));
+  color: var(--text);
+}
+
+.historyList {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+}
+
+.historyEmpty {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.historyItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--ui-font-size, 13px);
+  color: var(--text);
+  transition: border-color 120ms ease;
+}
+
+.historyItem:hover {
+  border-color: color-mix(in srgb, var(--ui-focus) 35%, var(--border));
+}
+
+.historyItem__title {
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyItem__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.historyItem__model {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.historyItem__chars {
+  font-size: 10px;
+}
+
+.historyItem__url {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+
 .hidden {
   display: none;
 }

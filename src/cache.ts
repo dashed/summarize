@@ -57,6 +57,14 @@ function normalizeTranscriptSource(value: unknown): TranscriptSource | null {
 
 export type CacheMetadata = Record<string, unknown>;
 
+export type CacheEntryInfo = {
+  key: string;
+  created_at: number;
+  last_accessed_at: number;
+  size_bytes: number;
+  metadata: CacheMetadata | null;
+};
+
 export type CacheStore = {
   getText: (kind: CacheKind, key: string) => string | null;
   getJson: <T>(kind: CacheKind, key: string) => T | null;
@@ -74,6 +82,14 @@ export type CacheStore = {
     ttlMs: number | null,
     metadata?: CacheMetadata | null,
   ) => void;
+  listEntries: (
+    kind: CacheKind,
+    opts?: { limit?: number; offset?: number; order?: "asc" | "desc" },
+  ) => CacheEntryInfo[];
+  getEntryWithMeta: (
+    kind: CacheKind,
+    key: string,
+  ) => { value: string; created_at: number; metadata: CacheMetadata | null } | null;
   clear: () => void;
   close: () => void;
   transcriptCache: TranscriptCache;
@@ -265,6 +281,23 @@ export async function createCacheStore({
     "SELECT kind, key, size_bytes FROM cache_entries ORDER BY last_accessed_at ASC LIMIT ?",
   );
   const stmtClear = db.prepare("DELETE FROM cache_entries");
+  const stmtList = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtGetWithMeta = db.prepare(
+    "SELECT value, created_at, expires_at, metadata FROM cache_entries WHERE kind = ? AND key = ?",
+  );
 
   const sweepExpired = (now: number) => {
     stmtDeleteExpired.run(now);
@@ -428,7 +461,58 @@ export async function createCacheStore({
     },
   };
 
-  return { getText, getJson, setText, setJson, clear, close, transcriptCache };
+  const parseMetadata = (raw: unknown): CacheMetadata | null => {
+    if (typeof raw !== "string" || !raw) return null;
+    try {
+      return JSON.parse(raw) as CacheMetadata;
+    } catch {
+      return null;
+    }
+  };
+
+  const listEntries = (
+    kind: CacheKind,
+    opts?: { limit?: number; offset?: number; order?: "asc" | "desc" },
+  ): CacheEntryInfo[] => {
+    const now = Date.now();
+    const limit = opts?.limit ?? 100;
+    const offset = opts?.offset ?? 0;
+    const stmt = opts?.order === "asc" ? stmtListAsc : stmtList;
+    const rows = stmt.all(kind, now, limit, offset) as Array<{
+      key: string;
+      created_at: number;
+      last_accessed_at: number;
+      size_bytes: number;
+      metadata: string | null;
+    }>;
+    return rows.map((row) => ({
+      key: row.key,
+      created_at: row.created_at,
+      last_accessed_at: row.last_accessed_at,
+      size_bytes: row.size_bytes,
+      metadata: parseMetadata(row.metadata),
+    }));
+  };
+
+  const getEntryWithMeta = (
+    kind: CacheKind,
+    key: string,
+  ): { value: string; created_at: number; metadata: CacheMetadata | null } | null => {
+    const now = Date.now();
+    const row = stmtGetWithMeta.get(kind, key) as
+      | { value: string; created_at: number; expires_at: number | null; metadata: string | null }
+      | undefined;
+    if (!row) return null;
+    if (typeof row.expires_at === "number" && row.expires_at <= now) return null;
+    stmtTouch.run(now, kind, key);
+    return {
+      value: row.value,
+      created_at: row.created_at,
+      metadata: parseMetadata(row.metadata),
+    };
+  };
+
+  return { getText, getJson, setText, setJson, listEntries, getEntryWithMeta, clear, close, transcriptCache };
 }
 
 export function clearCacheFiles(path: string) {

@@ -194,6 +194,13 @@ const modelStatusEl = byId<HTMLDivElement>("modelStatus");
 const modelRowEl = byId<HTMLDivElement>("modelRow");
 const slidesLayoutEl = byId<HTMLSelectElement>("slidesLayout");
 
+const historyToggleBtn = byId<HTMLButtonElement>("historyToggle");
+const historyPanelEl = byId<HTMLElement>("historyPanel");
+const historyListEl = byId<HTMLDivElement>("historyList");
+const historyEmptyEl = byId<HTMLDivElement>("historyEmpty");
+const historyTabSummariesBtn = byId<HTMLButtonElement>("historyTabSummaries");
+const historyTabChatsBtn = byId<HTMLButtonElement>("historyTabChats");
+
 const chatContainerEl = byId<HTMLElement>("chatContainer");
 const chatMessagesEl = byId<HTMLDivElement>("chatMessages");
 const chatInputEl = byId<HTMLTextAreaElement>("chatInput");
@@ -287,6 +294,8 @@ let inputModeOverride: "page" | "video" | null = null;
 let mediaAvailable = false;
 let preserveChatOnNextReset = false;
 let summarizeVideoLabel = "Video";
+let historyMode: "summaries" | "chats" = "summaries";
+let historyOpen = false;
 let summarizePageWords: number | null = null;
 let summarizeVideoDurationSeconds: number | null = null;
 
@@ -2636,6 +2645,30 @@ async function persistChatHistory() {
   } catch {
     // ignore
   }
+
+  // Also persist to daemon SQLite for cross-session persistence
+  try {
+    const token = await getAuthToken();
+    const url = panelState.currentSource?.url ?? activeTabUrl;
+    if (token && url && compacted.length > 0) {
+      fetch("http://127.0.0.1:8787/v1/agent/history/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          url,
+          title: panelState.currentSource?.title ?? null,
+          automationEnabled: automationEnabledValue,
+          messages: compacted,
+          model: panelState.lastMeta?.model ?? null,
+        }),
+      }).catch(() => {}); // Fire-and-forget
+    }
+  } catch {
+    // ignore
+  }
 }
 
 async function restoreChatHistory() {
@@ -3989,6 +4022,173 @@ function parseTimestampHref(href: string): number | null {
   return Math.floor(seconds);
 }
 
+/* ── History helpers ──────────────────────────────── */
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "\u2026" : s;
+}
+
+function formatChars(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
+  return `${n} chars`;
+}
+
+async function getAuthToken(): Promise<string> {
+  return (await loadSettings()).token.trim();
+}
+
+async function loadHistory() {
+  const token = await getAuthToken();
+  if (!token) {
+    historyListEl.innerHTML = '<div class="historyEmpty">No daemon token configured</div>';
+    return;
+  }
+  const endpoint =
+    historyMode === "summaries"
+      ? "http://127.0.0.1:8787/v1/history/summaries?limit=50"
+      : "http://127.0.0.1:8787/v1/history/chats?limit=50";
+
+  try {
+    const res = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      summaries?: Array<{
+        key: string;
+        created_at: number;
+        size_bytes: number;
+        metadata: Record<string, unknown> | null;
+      }>;
+      chats?: Array<{
+        key: string;
+        created_at: number;
+        size_bytes: number;
+        metadata: Record<string, unknown> | null;
+      }>;
+    };
+    const entries = data.summaries ?? data.chats ?? [];
+    renderHistoryList(entries);
+  } catch {
+    historyListEl.innerHTML = '<div class="historyEmpty">Could not load history</div>';
+  }
+}
+
+function renderHistoryList(
+  entries: Array<{
+    key: string;
+    created_at: number;
+    size_bytes: number;
+    metadata: Record<string, unknown> | null;
+  }>,
+) {
+  if (entries.length === 0) {
+    historyListEl.innerHTML = "";
+    historyEmptyEl.classList.remove("hidden");
+    return;
+  }
+  historyEmptyEl.classList.add("hidden");
+
+  historyListEl.innerHTML = entries
+    .map((entry) => {
+      const meta = entry.metadata ?? {};
+      const date = new Date(entry.created_at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const title = String(meta.title || meta.url || "Unknown");
+      const url = String(meta.url || "");
+      const model = String(meta.model || "");
+      const chars = (meta.summaryChars as number) || entry.size_bytes;
+
+      return `<button class="historyItem" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
+      <div class="historyItem__title">${escapeHtml(truncate(title, 60))}</div>
+      <div class="historyItem__meta">
+        <span class="historyItem__date">${date}</span>
+        ${model ? `<span class="historyItem__model">${escapeHtml(model)}</span>` : ""}
+        ${chars ? `<span class="historyItem__chars">${formatChars(chars)}</span>` : ""}
+      </div>
+      ${url ? `<div class="historyItem__url">${escapeHtml(truncate(url, 50))}</div>` : ""}
+    </button>`;
+    })
+    .join("");
+
+  for (const el of Array.from(historyListEl.querySelectorAll(".historyItem"))) {
+    el.addEventListener("click", () => {
+      const btn = el as HTMLElement;
+      void loadHistoryEntry(btn.dataset.key!, btn.dataset.mode!);
+    });
+  }
+}
+
+async function loadHistoryEntry(key: string, mode: string) {
+  if (mode === "summaries") {
+    const token = await getAuthToken();
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        value?: string;
+        metadata?: Record<string, unknown> | null;
+      };
+      if (data.ok && data.value) {
+        historyOpen = false;
+        historyPanelEl.classList.add("hidden");
+        historyToggleBtn.classList.remove("isActive");
+        renderMarkdown(data.value);
+        const meta = data.metadata ?? {};
+        headerController.setBaseTitle(String(meta.title || meta.url || "Summary"));
+        headerController.setBaseSubtitle(meta.model ? String(meta.model) : "");
+        setPhase("idle");
+      }
+    } catch {
+      // ignore
+    }
+  }
+  // Chat loading can be added later
+}
+
+function toggleHistoryPanel() {
+  historyOpen = !historyOpen;
+  historyPanelEl.classList.toggle("hidden", !historyOpen);
+  historyToggleBtn.classList.toggle("isActive", historyOpen);
+  if (historyOpen) {
+    // Close drawer if open
+    toggleDrawer(false);
+    void loadHistory();
+  }
+}
+
+historyToggleBtn.addEventListener("click", () => toggleHistoryPanel());
+
+historyTabSummariesBtn.addEventListener("click", () => {
+  historyMode = "summaries";
+  historyTabSummariesBtn.classList.add("active");
+  historyTabChatsBtn.classList.remove("active");
+  void loadHistory();
+});
+
+historyTabChatsBtn.addEventListener("click", () => {
+  historyMode = "chats";
+  historyTabChatsBtn.classList.add("active");
+  historyTabSummariesBtn.classList.remove("active");
+  void loadHistory();
+});
+
 function toggleDrawer(force?: boolean, opts?: { animate?: boolean }) {
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
   const animate = opts?.animate !== false && !reducedMotion;
@@ -4243,7 +4443,15 @@ refreshBtn.addEventListener("click", () => sendSummarize({ refresh: true }));
 clearBtn.addEventListener("click", () => {
   void clearCurrentView();
 });
-drawerToggleBtn.addEventListener("click", () => toggleDrawer());
+drawerToggleBtn.addEventListener("click", () => {
+  // Close history panel if open
+  if (historyOpen) {
+    historyOpen = false;
+    historyPanelEl.classList.add("hidden");
+    historyToggleBtn.classList.remove("isActive");
+  }
+  toggleDrawer();
+});
 advancedBtn.addEventListener("click", () => {
   void send({ type: "panel:openOptions" });
 });
