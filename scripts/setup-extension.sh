@@ -9,6 +9,8 @@
 # Environment variables (optional — set before running):
 #   OPENROUTER_API_KEY          — required for OpenRouter models
 #   SUMMARIZE_YT_DLP_COOKIES_FROM_BROWSER — override cookie browser/path
+#   SUMMARIZE_SLIDES_MULTIMODAL — send slide images to the model (default: true)
+#   SUMMARIZE_SLIDES_VIDEO      — send YouTube video URL to the model (default: true)
 
 set -euo pipefail
 
@@ -210,7 +212,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Check API key
+# Step 5: Check API key & multimodal env vars
 # ---------------------------------------------------------------------------
 if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
   ok "OPENROUTER_API_KEY is set"
@@ -218,6 +220,14 @@ else
   warn "OPENROUTER_API_KEY is not set. OpenRouter models will not work."
   warn "Set it before running this script: export OPENROUTER_API_KEY=sk-or-..."
 fi
+
+# Enable multimodal slides (send actual slide images to the model).
+export SUMMARIZE_SLIDES_MULTIMODAL="${SUMMARIZE_SLIDES_MULTIMODAL:-true}"
+ok "SUMMARIZE_SLIDES_MULTIMODAL=$SUMMARIZE_SLIDES_MULTIMODAL"
+
+# Enable video URL passthrough (send YouTube URL to Gemini via OpenRouter).
+export SUMMARIZE_SLIDES_VIDEO="${SUMMARIZE_SLIDES_VIDEO:-true}"
+ok "SUMMARIZE_SLIDES_VIDEO=$SUMMARIZE_SLIDES_VIDEO"
 
 # ---------------------------------------------------------------------------
 # Step 6: Resolve daemon token
