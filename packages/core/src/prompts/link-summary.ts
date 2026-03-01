@@ -128,8 +128,8 @@ export function buildLinkSummaryPrompt({
 
   const audienceLine =
     hasTranscript || isYouTube
-      ? "You summarize online videos for curious Twitter users who want to know whether the clip is worth watching."
-      : "You summarize online articles for curious Twitter users who want the gist before deciding to dive in.";
+      ? "You convert video content into detailed, readable text with timestamp navigation. Your goal is to let the reader fully consume the video's content in written form without needing to watch it."
+      : "You summarize online articles for curious readers who want the gist before deciding to dive in.";
 
   const effectiveSummaryLength: SummaryLengthTarget =
     typeof summaryLength === "string"
@@ -206,7 +206,9 @@ export function buildLinkSummaryPrompt({
           'End with a "Key moments" section containing 5-10 timestamp bullets as a quick-navigation guide to the most important parts of the video.',
           "Use timestamps liberally — they help the reader jump to relevant parts of the video. Do not invent timestamps or use ranges.",
           "Since you have access to the video content, be thorough: cover the main arguments, visual demos, key data points, and conclusions. Use the full allowed summary length.",
-          "If the video has little or no spoken audio (e.g. gameplay, screen recordings, tutorials with on-screen text, timelapses), describe what you see: on-screen text, UI elements, actions, visual transitions, and key events. The visual content IS the content.",
+          "If the video has little or no spoken audio (e.g. gameplay, screen recordings, tutorials with on-screen text, timelapses), you MUST thoroughly describe all visual content: every on-screen text, UI element, menu interaction, button click, code snippet, diagram, demonstration step, visual transition, and key event. Narrate the visual experience in detail as if describing it to someone who cannot see the screen — the visual content IS the primary content and must be described comprehensively.",
+          "Cover the ENTIRE video from start to finish. Distribute your coverage evenly across all segments — do not front-load the summary or skip later sections. Every major topic transition should get its own timestamp. Aim for at least one timestamp per 1-2 minutes of video.",
+          "When the video has minimal narration or sparse dialogue, expand your visual descriptions and contextual analysis to meet the full length target. Do not stop generating early — use the entire allowed length for thorough, detailed coverage of the video's content.",
         ].join(" ")
       : 'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp from the transcript. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.';
   const slideMarkers =
