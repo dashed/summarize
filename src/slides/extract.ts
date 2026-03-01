@@ -31,7 +31,7 @@ const DEFAULT_SLIDES_SAMPLE_COUNT = 8;
 // Prefer broadly-decodable H.264/MP4 for ffmpeg stability.
 // (Some "bestvideo" picks AV1 which can fail on certain ffmpeg builds / hwaccel setups.)
 const DEFAULT_YT_DLP_FORMAT_EXTRACT =
-  "bestvideo[height<=720][vcodec^=avc1][ext=mp4]/best[height<=720][vcodec^=avc1][ext=mp4]/bestvideo[height<=720][ext=mp4]/best[height<=720]";
+  "bestvideo[height<=720][vcodec^=avc1][ext=mp4]/best[height<=720][vcodec^=avc1][ext=mp4]/bestvideo[height<=720][ext=mp4]/best[height<=720]/bestvideo[height<=720]/best";
 
 type SlidesLogger = ((message: string) => void) | null;
 
@@ -769,6 +769,8 @@ async function downloadYoutubeVideo({
     format,
     "--no-playlist",
     "--no-warnings",
+    "--remote-components",
+    "ejs:github",
     "--concurrent-fragments",
     "4",
     ...buildYtDlpCookiesArgs({ cookiesFile, cookiesFromBrowser }),
@@ -966,6 +968,8 @@ async function resolveYoutubeStreamUrl({
   const args = [
     "-f",
     format,
+    "--remote-components",
+    "ejs:github",
     ...buildYtDlpCookiesArgs({ cookiesFile, cookiesFromBrowser }),
     "-g",
     url,
