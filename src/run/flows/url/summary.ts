@@ -1156,6 +1156,14 @@ export async function summarizeExtractedUrl({
       length: lengthKey,
       language: languageKey,
       url,
+      summaryChars: summaryResult.summary.length,
+      prompt,
+      systemPrompt: SUMMARY_SYSTEM_PROMPT,
+      contentChars: extracted.content.length,
+      videoDurationSeconds: extracted.mediaDurationSeconds ?? null,
+      hasVideo: !!extracted.video,
+      maxTokens: model.desiredOutputTokens,
+      preset,
     };
     cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs, cacheMeta);
     writeVerbose(io.stderr, flags.verbose, "cache write summary", flags.verboseColor, io.envForRun);

@@ -680,10 +680,17 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       lengthKey,
       languageKey,
     });
+    const preset = ctx.lengthArg.kind === "preset" ? ctx.lengthArg.preset : null;
     const cacheMeta = {
       model: usedAttempt.userModelId,
       length: lengthKey,
       language: languageKey,
+      summaryChars: summaryResult.summary.length,
+      prompt: promptText,
+      systemPrompt: SUMMARY_SYSTEM_PROMPT,
+      contentChars: textContent?.content.length ?? null,
+      maxTokens: ctx.desiredOutputTokens,
+      preset,
     };
     cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs, cacheMeta);
     writeVerbose(ctx.stderr, ctx.verbose, "cache write summary", ctx.verboseColor, ctx.envForRun);
