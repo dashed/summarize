@@ -4045,6 +4045,28 @@ async function getAuthToken(): Promise<string> {
   return (await loadSettings()).token.trim();
 }
 
+/** Strip transient query params (t, si, feature) so history matches the canonical URL. */
+function canonicalizeUrlForHistory(raw: string): string {
+  try {
+    const u = new URL(raw);
+    // YouTube: keep only the v= param (or /shorts/ path)
+    if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be")) {
+      const videoId = u.searchParams.get("v");
+      if (videoId) {
+        u.search = `?v=${videoId}`;
+      } else {
+        u.search = "";
+      }
+      u.hash = "";
+      return u.toString();
+    }
+    // Non-YouTube: keep origin + pathname (strip all query/hash)
+    return u.origin + u.pathname;
+  } catch {
+    return raw;
+  }
+}
+
 async function loadHistory() {
   const token = await getAuthToken();
   if (!token) {
@@ -4052,7 +4074,8 @@ async function loadHistory() {
     return;
   }
   const currentUrl = panelState.currentSource?.url ?? activeTabUrl ?? "";
-  const urlParam = currentUrl ? `&url=${encodeURIComponent(currentUrl)}` : "";
+  const canonical = currentUrl ? canonicalizeUrlForHistory(currentUrl) : "";
+  const urlParam = canonical ? `&url=${encodeURIComponent(canonical)}` : "";
   const endpoint =
     historyMode === "summaries"
       ? `http://127.0.0.1:8787/v1/history/summaries?limit=50${urlParam}`

@@ -299,7 +299,7 @@ export async function createCacheStore({
     SELECT key, created_at, last_accessed_at, size_bytes, metadata
     FROM cache_entries
     WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
-      AND json_extract(metadata, '$.url') = ?
+      AND json_extract(metadata, '$.url') LIKE ? || '%'
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `);
@@ -307,7 +307,7 @@ export async function createCacheStore({
     SELECT key, created_at, last_accessed_at, size_bytes, metadata
     FROM cache_entries
     WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
-      AND json_extract(metadata, '$.url') = ?
+      AND json_extract(metadata, '$.url') LIKE ? || '%'
     ORDER BY created_at ASC
     LIMIT ? OFFSET ?
   `);

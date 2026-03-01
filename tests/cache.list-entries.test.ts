@@ -164,12 +164,12 @@ describe("listEntries", () => {
     store.close();
   });
 
-  it("filters entries by URL in metadata when filterUrl is provided", async () => {
+  it("filters entries by URL prefix in metadata when filterUrl is provided", async () => {
     const store = await makeTempStore();
 
     store.setText("summary", "a", "content-a", null, { url: "https://example.com/video1" });
     store.setText("summary", "b", "content-b", null, { url: "https://example.com/video2" });
-    store.setText("summary", "c", "content-c", null, { url: "https://example.com/video1" });
+    store.setText("summary", "c", "content-c", null, { url: "https://example.com/video1&t=42" });
     store.setText("summary", "d", "content-d", null); // no metadata
 
     const filtered = store.listEntries("summary", { filterUrl: "https://example.com/video1" });
@@ -183,6 +183,32 @@ describe("listEntries", () => {
     // Without filter returns all
     const all = store.listEntries("summary");
     expect(all).toHaveLength(4);
+
+    store.close();
+  });
+
+  it("filterUrl prefix match catches YouTube URLs with extra params", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "a", "content-a", null, {
+      url: "https://www.youtube.com/watch?v=abc123&t=637s",
+    });
+    store.setText("summary", "b", "content-b", null, {
+      url: "https://www.youtube.com/watch?v=abc123",
+    });
+    store.setText("summary", "c", "content-c", null, {
+      url: "https://www.youtube.com/watch?v=other",
+    });
+
+    // Canonical URL (just ?v=abc123) matches both entries with that video ID
+    const filtered = store.listEntries("summary", {
+      filterUrl: "https://www.youtube.com/watch?v=abc123",
+    });
+    expect(filtered).toHaveLength(2);
+    const keys = filtered.map((e) => e.key);
+    expect(keys).toContain("a");
+    expect(keys).toContain("b");
+    expect(keys).not.toContain("c");
 
     store.close();
   });
