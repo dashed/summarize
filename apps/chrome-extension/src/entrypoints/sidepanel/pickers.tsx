@@ -530,6 +530,12 @@ function SummarizeControl(props: SummarizeControlProps) {
   const selectedValue = api.value[0] ?? "";
   const selectedLabel =
     api.valueAsString || sourceItems.find((item) => item.value === selectedValue)?.label || "Page";
+  const shortModeLabel =
+    selectedValue === "video-slides"
+      ? `${props.videoLabel ?? "Video"} + Slides`
+      : selectedValue === "video"
+        ? (props.videoLabel ?? "Video")
+        : "Page";
 
   const positionerProps = api.getPositionerProps();
   const positionerStyle = {
@@ -618,6 +624,7 @@ function SummarizeControl(props: SummarizeControlProps) {
           onKeyDown={onKeyDown}
         >
           Summarize
+          <span className="summarizeSource"> · {shortModeLabel}</span>
         </button>
         {portalRoot ? createPortal(content, portalRoot) : content}
         <select className="pickerHidden" {...api.getHiddenSelectProps()} />

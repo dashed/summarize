@@ -12,6 +12,10 @@ const extensionVersion = (() => {
   }
 })();
 
+// Chrome manifest requires purely numeric versions (e.g. "0.11.2"),
+// so strip any pre-release suffix like "-fork".
+const manifestVersion = extensionVersion.replace(/-.*$/, "");
+
 const gitHash = (() => {
   try {
     return execSync("git rev-parse --short HEAD", {
@@ -49,7 +53,7 @@ export default defineConfig({
       name: "Summarize",
       description: "Summarize what you see. Articles, threads, YouTube, podcasts — anything.",
       homepage_url: "https://summarize.sh",
-      version: extensionVersion,
+      version: manifestVersion,
       icons: {
         16: "assets/icon-16.png",
         32: "assets/icon-32.png",

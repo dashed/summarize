@@ -552,6 +552,11 @@ header {
   padding-right: 28px;
 }
 
+.summarizeButton .summarizeSource {
+  opacity: 0.55;
+  font-weight: 400;
+}
+
 .summarizeButton.isDropdown::after {
   content: "";
   width: 6px;
