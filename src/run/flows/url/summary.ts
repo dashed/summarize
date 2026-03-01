@@ -239,19 +239,36 @@ export async function buildMultimodalSlidesPrompt({
   const slidesWithTimestamps = slides.slides
     .filter((slide) => Number.isFinite(slide.timestamp) && slide.imagePath)
     .sort((a, b) => a.timestamp - b.timestamp);
-  if (slidesWithTimestamps.length === 0) return null;
+  if (slidesWithTimestamps.length === 0) {
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: no slides with valid timestamp+imagePath, returning null`,
+    );
+    return null;
+  }
 
   // Read all slide images from disk.
   const slideImages = new Map<number, Uint8Array>();
+  let readFailures = 0;
   for (const slide of slidesWithTimestamps) {
     try {
       const buf = await fs.readFile(slide.imagePath);
       slideImages.set(slide.index, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
-    } catch {
-      // Skip unreadable images.
+    } catch (err) {
+      readFailures++;
+      console.error(
+        `[summarize:video] buildMultimodalSlidesPrompt: failed to read slide ${slide.index} at ${slide.imagePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
-  if (slideImages.size === 0) return null;
+  if (slideImages.size === 0) {
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: all ${readFailures} slide image reads failed, returning null`,
+    );
+    return null;
+  }
+  console.error(
+    `[summarize:video] buildMultimodalSlidesPrompt: read ${slideImages.size}/${slidesWithTimestamps.length} slide images (${readFailures} failed)`,
+  );
 
   const totalBudget = Number(MAX_SLIDE_TRANSCRIPT_CHARS_BY_PRESET[preset]);
   const perSlideBudget = Math.max(120, Math.floor(totalBudget / Math.max(1, slidesWithTimestamps.length)));
@@ -778,11 +795,27 @@ export async function summarizeExtractedUrl({
     preset,
     ...(videoEnabled ? { sourceUrl: url } : {}),
   });
-  const slideAttachments = interleavedParts ? [] : await readSlideImageAttachments(slides);
+
+  // If video is enabled but buildMultimodalSlidesPrompt returned null (e.g. slide
+  // images not yet extracted), still inject the video_url so Gemini can process the
+  // video directly.  Everything goes in a single LLM call.
+  const effectiveInterleavedParts: PromptPart[] | null = (() => {
+    if (interleavedParts) return interleavedParts;
+    if (!videoEnabled) return null;
+    console.error(
+      `[summarize:video] summarizeExtractedUrl: slides prompt was null but video enabled; injecting standalone video_url=${url}`,
+    );
+    return [
+      { kind: "text" as const, text: prompt },
+      { kind: "video_url" as const, url },
+    ];
+  })();
+
+  const slideAttachments = effectiveInterleavedParts ? [] : await readSlideImageAttachments(slides);
   const promptPayload: Prompt = {
     system: SUMMARY_SYSTEM_PROMPT,
     userText: prompt,
-    ...(interleavedParts ? { interleavedParts } : {}),
+    ...(effectiveInterleavedParts ? { interleavedParts: effectiveInterleavedParts } : {}),
     ...(slideAttachments.length > 0 ? { attachments: slideAttachments } : {}),
   };
   const promptTokens = countTokens(promptPayload.userText);
