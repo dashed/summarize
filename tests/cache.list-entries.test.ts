@@ -163,6 +163,58 @@ describe("listEntries", () => {
 
     store.close();
   });
+
+  it("filters entries by URL in metadata when filterUrl is provided", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "a", "content-a", null, { url: "https://example.com/video1" });
+    store.setText("summary", "b", "content-b", null, { url: "https://example.com/video2" });
+    store.setText("summary", "c", "content-c", null, { url: "https://example.com/video1" });
+    store.setText("summary", "d", "content-d", null); // no metadata
+
+    const filtered = store.listEntries("summary", { filterUrl: "https://example.com/video1" });
+    expect(filtered).toHaveLength(2);
+    const keys = filtered.map((e) => e.key);
+    expect(keys).toContain("a");
+    expect(keys).toContain("c");
+    expect(keys).not.toContain("b");
+    expect(keys).not.toContain("d");
+
+    // Without filter returns all
+    const all = store.listEntries("summary");
+    expect(all).toHaveLength(4);
+
+    store.close();
+  });
+
+  it("filterUrl with no matches returns empty", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "a", "content", null, { url: "https://example.com/video1" });
+
+    const entries = store.listEntries("summary", { filterUrl: "https://other.com" });
+    expect(entries).toHaveLength(0);
+
+    store.close();
+  });
+
+  it("filterUrl works with ASC order", async () => {
+    const dbPath = join(mkdtempSync(join(tmpdir(), "summarize-cache-url-asc-")), "cache.sqlite");
+    const store = await createCacheStore({ path: dbPath, maxBytes: 1024 * 1024 });
+    insertWithTimestamp(dbPath, "summary", "a", "first", 1000, { url: "https://example.com" });
+    insertWithTimestamp(dbPath, "summary", "b", "second", 2000, { url: "https://example.com" });
+    insertWithTimestamp(dbPath, "summary", "c", "third", 3000, { url: "https://other.com" });
+
+    const entries = store.listEntries("summary", {
+      filterUrl: "https://example.com",
+      order: "asc",
+    });
+    expect(entries).toHaveLength(2);
+    expect(entries[0].key).toBe("a");
+    expect(entries[1].key).toBe("b");
+
+    store.close();
+  });
 });
 
 describe("getEntryWithMeta", () => {

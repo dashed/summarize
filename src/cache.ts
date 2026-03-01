@@ -84,7 +84,7 @@ export type CacheStore = {
   ) => void;
   listEntries: (
     kind: CacheKind,
-    opts?: { limit?: number; offset?: number; order?: "asc" | "desc" },
+    opts?: { limit?: number; offset?: number; order?: "asc" | "desc"; filterUrl?: string },
   ) => CacheEntryInfo[];
   getEntryWithMeta: (
     kind: CacheKind,
@@ -295,6 +295,22 @@ export async function createCacheStore({
     ORDER BY created_at ASC
     LIMIT ? OFFSET ?
   `);
+  const stmtListByUrl = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND json_extract(metadata, '$.url') = ?
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrlAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND json_extract(metadata, '$.url') = ?
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
   const stmtGetWithMeta = db.prepare(
     "SELECT value, created_at, expires_at, metadata FROM cache_entries WHERE kind = ? AND key = ?",
   );
@@ -472,19 +488,26 @@ export async function createCacheStore({
 
   const listEntries = (
     kind: CacheKind,
-    opts?: { limit?: number; offset?: number; order?: "asc" | "desc" },
+    opts?: { limit?: number; offset?: number; order?: "asc" | "desc"; filterUrl?: string },
   ): CacheEntryInfo[] => {
     const now = Date.now();
     const limit = opts?.limit ?? 100;
     const offset = opts?.offset ?? 0;
-    const stmt = opts?.order === "asc" ? stmtListAsc : stmtList;
-    const rows = stmt.all(kind, now, limit, offset) as Array<{
+    const filterUrl = opts?.filterUrl;
+    let rows: Array<{
       key: string;
       created_at: number;
       last_accessed_at: number;
       size_bytes: number;
       metadata: string | null;
     }>;
+    if (filterUrl) {
+      const stmt = opts?.order === "asc" ? stmtListByUrlAsc : stmtListByUrl;
+      rows = stmt.all(kind, now, filterUrl, limit, offset) as typeof rows;
+    } else {
+      const stmt = opts?.order === "asc" ? stmtListAsc : stmtList;
+      rows = stmt.all(kind, now, limit, offset) as typeof rows;
+    }
     return rows.map((row) => ({
       key: row.key,
       created_at: row.created_at,

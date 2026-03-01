@@ -4051,10 +4051,12 @@ async function loadHistory() {
     historyListEl.innerHTML = '<div class="historyEmpty">No daemon token configured</div>';
     return;
   }
+  const currentUrl = panelState.currentSource?.url ?? activeTabUrl ?? "";
+  const urlParam = currentUrl ? `&url=${encodeURIComponent(currentUrl)}` : "";
   const endpoint =
     historyMode === "summaries"
-      ? "http://127.0.0.1:8787/v1/history/summaries?limit=50"
-      : "http://127.0.0.1:8787/v1/history/chats?limit=50";
+      ? `http://127.0.0.1:8787/v1/history/summaries?limit=50${urlParam}`
+      : `http://127.0.0.1:8787/v1/history/chats?limit=50${urlParam}`;
 
   try {
     const res = await fetch(endpoint, {

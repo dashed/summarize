@@ -1641,12 +1641,13 @@ export async function runDaemonServer({
       if (req.method === "GET" && pathname === "/v1/history/summaries") {
         const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const filterUrl = url.searchParams.get("url") ?? undefined;
         const store = cacheState.store;
         if (!store) {
           json(res, 200, { ok: true, summaries: [] }, cors);
           return;
         }
-        const entries = store.listEntries("summary", { limit, offset });
+        const entries = store.listEntries("summary", { limit, offset, filterUrl });
         json(res, 200, { ok: true, summaries: entries }, cors);
         return;
       }
@@ -1721,12 +1722,13 @@ export async function runDaemonServer({
       if (req.method === "GET" && pathname === "/v1/history/chats") {
         const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const filterUrl = url.searchParams.get("url") ?? undefined;
         const store = cacheState.store;
         if (!store) {
           json(res, 200, { ok: true, chats: [] }, cors);
           return;
         }
-        const entries = store.listEntries("chat", { limit, offset });
+        const entries = store.listEntries("chat", { limit, offset, filterUrl });
         json(res, 200, { ok: true, chats: entries }, cors);
         return;
       }
