@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (27 commits ahead of upstream)
+**Version:** `0.11.2-fork` (29 commits ahead of upstream)
 
 ---
 
@@ -101,10 +101,11 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 - **`listEntries()` on CacheStore** — New method to query cached entries by kind with pagination and sort order. Filters expired entries, parses metadata JSON
 - **`getEntryWithMeta()`** — Fetch a single cache entry with its full value, created_at timestamp, and parsed metadata
-- **Summary history API** — `GET /v1/history/summaries` lists cached summaries (metadata only), `GET /v1/history/summaries/:key` returns full summary text
+- **Summary history API** — `GET /v1/history/summaries` lists cached summaries (metadata only), `GET /v1/history/summaries/:key` returns full summary text. Accepts `?url=` query param to filter by URL
 - **Chat session persistence** — `POST /v1/agent/history/save` persists chat messages to SQLite with metadata (url, title, model, messageCount). `POST /v1/agent/history` loads chat sessions back (was previously unimplemented, returning 404)
-- **Chat history listing** — `GET /v1/history/chats` lists saved chat sessions
-- **History panel UI** — Clock icon button in sidepanel header opens a history panel with Summaries/Chats tabs, scrollable list of past entries with title, date, model badge, and char count. Click to load a previous summary
+- **Chat history listing** — `GET /v1/history/chats` lists saved chat sessions. Accepts `?url=` query param to filter by URL
+- **History panel UI** — Clock icon button in sidepanel header opens a history panel with Summaries/Chats tabs, scrollable list of past entries with title, date, model badge, and char count. Click to load a previous summary. Filtered to current tab's URL
+- **URL-filtered history** — History entries filtered by current tab URL using `LIKE` prefix matching on `json_extract(metadata, '$.url')`. YouTube URLs canonicalized (strip `t=`, `si=` params) so different visits to the same video match
 - **Auto-save chat to daemon** — Chat sessions auto-saved to daemon SQLite (fire-and-forget) after each assistant response, surviving browser restarts
 
 **Key files:**
@@ -129,7 +130,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-27 commits ahead of upstream, oldest to newest:
+29 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -158,14 +159,15 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 23 | `5542f3d` | feat: reframe prompts from summarization to content extraction for video | Prompts |
 | 24 | `a1e5eac` | docs: add FORK.md documenting all fork changes | Docs |
 | 25 | `a889c01` | fix: auto-restore summaries on tab switch back | Extension Fix |
-| 26 | | feat: add summary history and chat session persistence | History |
-| 27 | | test: add cache list and history API tests | Tests |
+| 26 | `b5ced77` | feat: add summary history and chat session persistence | History |
+| 27 | `baf794a` | fix: filter history entries by current tab URL | History Fix |
+| 28 | `b396369` | fix: use prefix matching for history URL filter | History Fix |
 
 ---
 
 ## Test Coverage
 
-3,176 lines of test code added across 23 test files:
+4,147 lines of test code added across 22 test files:
 
 - `tests/chrome.cookies.test.ts` — Chrome cookie export
 - `tests/slides.build-yt-dlp-cookies-args.test.ts` — yt-dlp cookie args
@@ -201,3 +203,4 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 7. **Content extraction vs summarization** — Video prompts reframed from "summarize" to "extract into readable text with timestamps" for better output quality
 8. **Tab-switch SSE reconnect** — Save panel cache before aborting streams, then reconnect to daemon's SSE replay buffer on tab switch back for seamless restore
 9. **Summary/chat history via existing cache** — Reuses the `cache_entries` SQLite table with `listEntries()` queries rather than adding new tables. Chat sessions keyed by URL+automationEnabled hash using the reserved `"chat"` CacheKind
+10. **URL prefix matching for history** — Uses `LIKE ? || '%'` on `json_extract(metadata, '$.url')` instead of exact match. Extension canonicalizes YouTube URLs (strips `t=`, `si=` params) so the prefix `?v=abc123` matches stored URLs like `?v=abc123&t=637s`
