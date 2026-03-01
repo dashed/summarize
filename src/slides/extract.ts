@@ -759,7 +759,12 @@ export async function extractSlidesForSource({
         }
 
         let slidesWithOcr = renamedSlides;
-        if (ocrEnabled && tesseractPath) {
+        if (useGemini && geminiResult) {
+          // Skip Tesseract OCR — use Gemini descriptions as ocrText instead.
+          slidesWithOcr = applyGeminiDescriptions(renamedSlides, geminiResult.timestamps);
+          logSlides?.(`ocr skipped (using ${geminiResult.timestamps.length} Gemini descriptions)`);
+          reportSlidesProgress?.("using Gemini descriptions", P_OCR);
+        } else if (ocrEnabled && tesseractPath) {
           const ocrStartedAt = Date.now();
           logSlides?.(`ocr start count=${renamedSlides.length} mode=parallel workers=${workers}`);
           const ocrStartPercent = P_OCR - 3;
@@ -2400,6 +2405,35 @@ async function runWithConcurrency<T>(
   const runners = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
   await Promise.all(runners);
   return results;
+}
+
+/**
+ * When Gemini pre-pass succeeds, use its descriptions as ocrText instead of
+ * running Tesseract. Each slide is matched to the closest Gemini timestamp.
+ */
+export function applyGeminiDescriptions(
+  slides: SlideImage[],
+  timestamps: Array<{ seconds: number; description: string }>,
+): SlideImage[] {
+  if (timestamps.length === 0) {
+    return slides.map((slide) => ({ ...slide, ocrText: "", ocrConfidence: 0 }));
+  }
+  return slides.map((slide) => {
+    let best = timestamps[0]!;
+    let bestDist = Math.abs(slide.timestamp - best.seconds);
+    for (let i = 1; i < timestamps.length; i++) {
+      const dist = Math.abs(slide.timestamp - timestamps[i]!.seconds);
+      if (dist < bestDist) {
+        best = timestamps[i]!;
+        bestDist = dist;
+      }
+    }
+    return {
+      ...slide,
+      ocrText: best.description,
+      ocrConfidence: 1.0,
+    };
+  });
 }
 
 async function runOcrOnSlides(
