@@ -514,6 +514,7 @@ export async function runUrlFlow({
           ytDlpCookiesFile: model.apiStatus.ytDlpCookiesFile,
           ffmpegPath: null,
           tesseractPath: null,
+          openrouterApiKey: model.apiStatus.openrouterApiKey,
           hooks: {
             onSlideChunk: (chunk) => ctx.hooks.onSlideChunk?.(chunk),
             onSlidesTimeline: (timeline) => {

@@ -229,6 +229,7 @@ export async function handleSlidesCliRequest({
       ytDlpCookiesFile: null,
       ffmpegPath: null,
       tesseractPath: null,
+      openrouterApiKey: envState.openrouterApiKey,
       hooks: {
         onSlidesProgress,
         onSlidesLog: logSlides,

@@ -354,7 +354,7 @@ export function buildUrlPrompt({
   languageInstruction?: string | null;
   slides?: SlidesResult | null;
 }): string {
-  const isYouTube = extracted.siteName === "YouTube";
+  const isYouTube = extracted.siteName === "YouTube" || isYouTubeUrl(extracted.url);
   const preset = lengthArg.kind === "preset" ? lengthArg.preset : "medium";
   const slidesText = buildSlidesPromptText({
     slides,
@@ -372,6 +372,7 @@ export function buildUrlPrompt({
       isYouTube ||
       (extracted.transcriptSource !== null && extracted.transcriptSource !== "unavailable"),
     hasTranscriptTimestamps: Boolean(extracted.transcriptTimedText),
+    isYouTube,
     slides: slidesText ? { count: slides?.slides.length ?? 0, text: slidesText } : null,
     chapters: slides?.chapters ?? null,
     summaryLength:

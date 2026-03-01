@@ -71,6 +71,7 @@ export function buildLinkSummaryPrompt({
   truncated,
   hasTranscript,
   hasTranscriptTimestamps = false,
+  isYouTube = false,
   slides,
   chapters,
   outputLanguage,
@@ -88,6 +89,7 @@ export function buildLinkSummaryPrompt({
   truncated: boolean;
   hasTranscript: boolean;
   hasTranscriptTimestamps?: boolean;
+  isYouTube?: boolean;
   slides?: { count: number; text: string } | null;
   chapters?: { startTime: number; endTime: number; title: string }[] | null;
   summaryLength: SummaryLengthTarget;
@@ -124,9 +126,10 @@ export function buildLinkSummaryPrompt({
 
   const contextHeader = contextLines.join("\n");
 
-  const audienceLine = hasTranscript
-    ? "You summarize online videos for curious Twitter users who want to know whether the clip is worth watching."
-    : "You summarize online articles for curious Twitter users who want the gist before deciding to dive in.";
+  const audienceLine =
+    hasTranscript || isYouTube
+      ? "You summarize online videos for curious Twitter users who want to know whether the clip is worth watching."
+      : "You summarize online articles for curious Twitter users who want the gist before deciding to dive in.";
 
   const effectiveSummaryLength: SummaryLengthTarget =
     typeof summaryLength === "string"
@@ -188,10 +191,22 @@ export function buildLinkSummaryPrompt({
       : 'You are not given any quotes from people who shared this link. Do not fabricate reactions or add a "What sharers are saying" subsection.';
 
   const shareBlock = shares.length > 0 ? `Tweets from sharers:\n${shareLines.join("\n")}` : "";
-  const timestampInstruction =
-    hasTranscriptTimestamps && !(slides && slides.count > 0)
-      ? 'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp from the transcript. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.'
-      : "";
+  const includeTimestamps = (hasTranscriptTimestamps || isYouTube) && !(slides && slides.count > 0);
+  if (includeTimestamps && isYouTube && !hasTranscriptTimestamps) {
+    console.error("[summarize:video] prompt: including YouTube timestamp instruction");
+  }
+  const timestampInstruction = !includeTimestamps
+    ? ""
+    : isYouTube
+      ? [
+          "Weave [mm:ss] (or [hh:mm:ss]) timestamps throughout the summary wherever you reference a specific moment, topic change, or visual from the video.",
+          'Place them naturally inline, for example: "At [2:15], the speaker introduces..." or "The demo ([5:30]) shows...".',
+          'End with a "Key moments" section containing 5-10 timestamp bullets as a quick-navigation guide to the most important parts of the video.',
+          "Use timestamps liberally — they help the reader jump to relevant parts of the video. Do not invent timestamps or use ranges.",
+          "Since you have access to the video content, be thorough: cover the main arguments, visual demos, key data points, and conclusions. Use the full allowed summary length.",
+          "If the video has little or no spoken audio (e.g. gameplay, screen recordings, tutorials with on-screen text, timelapses), describe what you see: on-screen text, UI elements, actions, visual transitions, and key events. The visual content IS the content.",
+        ].join(" ")
+      : 'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp from the transcript. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.';
   const slideMarkers =
     slides && slides.count > 0
       ? Array.from({ length: slides.count }, (_, index) => `[slide:${index + 1}]`).join(" ")

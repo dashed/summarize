@@ -346,3 +346,169 @@ export async function completeOpenAiTextWithVideo({
     clearTimeout(timeout);
   }
 }
+
+/**
+ * Ask a Gemini model (via OpenRouter) to identify key visual moments in a
+ * video and return their timestamps.  Uses the same raw-fetch pattern as
+ * {@link completeOpenAiTextWithVideo}.
+ */
+export async function getVideoTimestampsFromGemini({
+  videoUrl,
+  openrouterApiKey,
+  maxSlides,
+  timeoutMs,
+  fetchImpl,
+  modelId,
+}: {
+  videoUrl: string;
+  openrouterApiKey: string;
+  maxSlides?: number;
+  timeoutMs: number;
+  fetchImpl: typeof fetch;
+  modelId?: string;
+}): Promise<{ timestamps: Array<{ seconds: number; description: string }> }> {
+  const model = modelId ?? "google/gemini-3-flash-preview";
+  const effectiveMaxSlides = maxSlides ?? 12;
+
+  console.error(
+    `[summarize:video] getVideoTimestampsFromGemini: model=${model}, videoUrl=${videoUrl}, maxSlides=${effectiveMaxSlides}`,
+  );
+
+  const url = "https://openrouter.ai/api/v1/chat/completions";
+
+  const messages: Array<Record<string, unknown>> = [
+    {
+      role: "system",
+      content:
+        "You are a video analysis assistant. Your task is to identify key visual moments in videos.",
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text:
+            `Watch this video and identify up to ${effectiveMaxSlides} key visual moments where the visual content changes significantly (e.g., new slide, diagram, topic change, demo transition). For each moment, provide the timestamp in seconds and a brief description of what appears.\n\n` +
+            `Return ONLY valid JSON with this structure: {"timestamps": [{"seconds": <number>, "description": "<brief description>"}]}\n\n` +
+            `Order by timestamp. Be precise with timestamps.`,
+        },
+        {
+          type: "video_url",
+          video_url: { url: videoUrl },
+        },
+      ],
+    },
+  ];
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "video_timestamps",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            timestamps: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  seconds: { type: "number" },
+                  description: { type: "string" },
+                },
+                required: ["seconds", "description"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["timestamps"],
+          additionalProperties: false,
+        },
+      },
+    },
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${openrouterApiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const bodyText = await response.text();
+    console.error(
+      `[summarize:video] getVideoTimestampsFromGemini response: status=${response.status}, bodyLength=${bodyText.length} chars`,
+    );
+
+    if (!response.ok) {
+      console.error(
+        `[summarize:video] getVideoTimestampsFromGemini ERROR: ${bodyText.slice(0, 500)}`,
+      );
+      const error = new Error(
+        `OpenRouter API error (${response.status}): ${bodyText}`,
+      );
+      (error as { statusCode?: number }).statusCode = response.status;
+      (error as { responseBody?: string }).responseBody = bodyText;
+      throw error;
+    }
+
+    const data = JSON.parse(bodyText) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const rawContent = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (!rawContent) {
+      throw new Error(
+        `getVideoTimestampsFromGemini: LLM returned empty content (model ${model}).`,
+      );
+    }
+
+    // Try parsing the content as JSON directly, then fall back to extracting
+    // from a markdown code block.
+    let parsed: { timestamps?: unknown };
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch {
+      const match = rawContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (!match) {
+        throw new Error(
+          `getVideoTimestampsFromGemini: Failed to parse JSON from response: ${rawContent.slice(0, 200)}`,
+        );
+      }
+      parsed = JSON.parse(match[1].trim());
+    }
+
+    // Validate and filter timestamps.
+    const raw = Array.isArray(parsed.timestamps) ? parsed.timestamps : [];
+    const timestamps = raw
+      .filter(
+        (entry: { seconds?: unknown; description?: unknown }) =>
+          typeof entry.seconds === "number" &&
+          Number.isFinite(entry.seconds) &&
+          entry.seconds > 0 &&
+          typeof entry.description === "string",
+      )
+      .map((entry: { seconds: number; description: string }) => ({
+        seconds: entry.seconds,
+        description: entry.description,
+      }))
+      .sort((a: { seconds: number }, b: { seconds: number }) => a.seconds - b.seconds);
+
+    console.error(
+      `[summarize:video] getVideoTimestampsFromGemini success: found ${timestamps.length} timestamps`,
+    );
+
+    return { timestamps };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

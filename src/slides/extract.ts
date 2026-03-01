@@ -14,6 +14,7 @@ import type {
   VideoChapter,
 } from "./types.js";
 import { extractYouTubeVideoId, isDirectMediaUrl, isYouTubeUrl } from "../content/index.js";
+import { getVideoTimestampsFromGemini } from "../llm/providers/openai.js";
 import { spawnTracked } from "../processes.js";
 import { resolveExecutableInPath } from "../run/env.js";
 import {
@@ -180,6 +181,10 @@ type ExtractSlidesArgs = {
   ytDlpCookiesFile?: string | null;
   ffmpegPath: string | null;
   tesseractPath: string | null;
+  /** OpenRouter API key — when provided for YouTube sources, enables Gemini-based timestamp pre-pass. */
+  openrouterApiKey?: string | null;
+  /** fetch implementation for the Gemini API call. */
+  fetchImpl?: typeof fetch;
   hooks?: {
     onSlideChunk?: (chunk: {
       slide: SlideImage;
@@ -284,6 +289,8 @@ export async function extractSlidesForSource({
   ytDlpCookiesFile,
   ffmpegPath,
   tesseractPath,
+  openrouterApiKey,
+  fetchImpl,
   hooks,
 }: ExtractSlidesArgs): Promise<SlideExtractionResult> {
   const slidesDir = resolveSlidesDir(settings.outputDir, source.sourceId);
@@ -367,6 +374,30 @@ export async function extractSlidesForSource({
               cookiesFromBrowser: ytDlpCookiesFromBrowser,
             }).catch(() => null)
           : Promise.resolve(null);
+
+      // Kick off Gemini timestamp pre-pass in parallel with the video download.
+      // Only for YouTube sources when an OpenRouter API key is available.
+      const useGeminiTimestamps = source.kind === "youtube" && Boolean(openrouterApiKey);
+      const geminiTimestampsPromise: Promise<{
+        timestamps: Array<{ seconds: number; description: string }>;
+      } | null> = useGeminiTimestamps
+        ? (() => {
+            logSlides("gemini timestamp pre-pass started");
+            reportSlidesProgress?.("analyzing video with Gemini", P_PREPARE + 1);
+            return getVideoTimestampsFromGemini({
+              videoUrl: source.url,
+              openrouterApiKey: openrouterApiKey!,
+              maxSlides: settings.maxSlides,
+              timeoutMs,
+              fetchImpl: fetchImpl ?? globalThis.fetch,
+            }).catch((error) => {
+              const msg = error instanceof Error ? error.message : String(error);
+              console.error(`[summarize:video] gemini timestamp pre-pass failed: ${msg}`);
+              warnings.push(`Gemini timestamp pre-pass failed; falling back to ffmpeg: ${msg}`);
+              return null;
+            });
+          })()
+        : Promise.resolve(null);
 
       const allowStreamFallback = resolveSlidesStreamFallback(env);
       let inputPath = source.url;
@@ -519,66 +550,114 @@ export async function extractSlidesForSource({
       }
 
       try {
-        const ffmpegStartedAt = Date.now();
-        reportSlidesProgress?.("detecting scenes", P_FETCH_VIDEO + 2);
-        const detection = await detectSlideTimestamps({
-          ffmpegPath: ffmpegBinary,
-          ffprobePath: ffprobeBinary,
-          inputPath,
-          sceneThreshold: settings.sceneThreshold,
-          autoTuneThreshold: settings.autoTuneThreshold,
-          env,
-          timeoutMs,
-          warnings,
-          workers,
-          sampleCount: resolveSlidesSampleCount(env),
-          onSegmentProgress: (completed, total) => {
-            const ratio = total > 0 ? completed / total : 0;
-            const mapped = P_FETCH_VIDEO + 2 + ratio * (P_DETECT_SCENES - (P_FETCH_VIDEO + 2));
-            reportSlidesProgress?.(
-              "detecting scenes",
-              mapped,
-              total > 0 ? `(${completed}/${total})` : undefined,
-            );
-          },
-          logSlides,
-          logSlidesTiming,
-        });
-        reportSlidesProgress?.("detecting scenes", P_DETECT_SCENES);
-        logSlidesTiming("ffmpeg scene-detect", ffmpegStartedAt);
+        // ── Timestamp detection: Gemini pre-pass or ffmpeg scene detection ──
+        const geminiResult = await geminiTimestampsPromise;
+        const useGemini = geminiResult && geminiResult.timestamps.length > 0;
 
-        const interval = buildIntervalTimestamps({
-          durationSeconds: detection.durationSeconds,
-          minDurationSeconds: settings.minDurationSeconds,
-          maxSlides: settings.maxSlides,
-        });
-        const combined = mergeTimestamps(
-          detection.timestamps,
-          interval?.timestamps ?? [],
-          settings.minDurationSeconds,
-        );
-        if (combined.length === 0) {
+        type TrimmedSlide = { index: number; timestamp: number; imagePath: string; segment?: { start: number; end: number | null } | null };
+        let trimmed: TrimmedSlide[];
+        let detection: { timestamps: number[]; durationSeconds: number | null; autoTune: SlideAutoTune } | null = null;
+        let geminiChapters: VideoChapter[] | null = null;
+
+        if (useGemini) {
+          // ── Gemini-guided timestamps ──
+          const geminiStartedAt = Date.now();
+          logSlides(`gemini pre-pass returned ${geminiResult.timestamps.length} timestamps`);
+          reportSlidesProgress?.("using Gemini timestamps", P_DETECT_SCENES);
+
+          const spaced = filterTimestampsByMinDuration(
+            geminiResult.timestamps.map((t) => t.seconds),
+            settings.minDurationSeconds,
+          );
+          trimmed = applyMaxSlidesFilter(
+            spaced.map((timestamp, index) => ({
+              index: index + 1,
+              timestamp,
+              imagePath: "",
+              segment: null,
+            })),
+            settings.maxSlides,
+            warnings,
+          );
+
+          // Build VideoChapter from Gemini descriptions.
+          geminiChapters = geminiResult.timestamps.map((t, i) => {
+            const next = geminiResult.timestamps[i + 1];
+            return {
+              startTime: t.seconds,
+              endTime: next ? next.seconds : t.seconds + 30,
+              title: t.description,
+            };
+          });
+
+          logSlidesTiming("gemini timestamp pre-pass (total)", geminiStartedAt);
+        } else {
+          // ── Fallback: ffmpeg scene detection ──
+          const ffmpegStartedAt = Date.now();
+          reportSlidesProgress?.("detecting scenes", P_FETCH_VIDEO + 2);
+          detection = await detectSlideTimestamps({
+            ffmpegPath: ffmpegBinary,
+            ffprobePath: ffprobeBinary,
+            inputPath,
+            sceneThreshold: settings.sceneThreshold,
+            autoTuneThreshold: settings.autoTuneThreshold,
+            env,
+            timeoutMs,
+            warnings,
+            workers,
+            sampleCount: resolveSlidesSampleCount(env),
+            onSegmentProgress: (completed, total) => {
+              const ratio = total > 0 ? completed / total : 0;
+              const mapped = P_FETCH_VIDEO + 2 + ratio * (P_DETECT_SCENES - (P_FETCH_VIDEO + 2));
+              reportSlidesProgress?.(
+                "detecting scenes",
+                mapped,
+                total > 0 ? `(${completed}/${total})` : undefined,
+              );
+            },
+            logSlides,
+            logSlidesTiming,
+          });
+          reportSlidesProgress?.("detecting scenes", P_DETECT_SCENES);
+          logSlidesTiming("ffmpeg scene-detect", ffmpegStartedAt);
+
+          const interval = buildIntervalTimestamps({
+            durationSeconds: detection.durationSeconds,
+            minDurationSeconds: settings.minDurationSeconds,
+            maxSlides: settings.maxSlides,
+          });
+          const combined = mergeTimestamps(
+            detection.timestamps,
+            interval?.timestamps ?? [],
+            settings.minDurationSeconds,
+          );
+          if (combined.length === 0) {
+            throw new Error("No slides detected; try adjusting slide extraction settings.");
+          }
+          const sceneSegments = buildSceneSegments(detection.timestamps, detection.durationSeconds);
+          const selected = interval?.timestamps.length
+            ? selectTimestampTargets({
+                targets: interval.timestamps,
+                sceneTimestamps: detection.timestamps,
+                minDurationSeconds: settings.minDurationSeconds,
+                intervalSeconds: interval.intervalSeconds,
+              })
+            : combined;
+          const spaced = filterTimestampsByMinDuration(selected, settings.minDurationSeconds);
+          trimmed = applyMaxSlidesFilter(
+            spaced.map((timestamp, index) => {
+              const segment = findSceneSegment(sceneSegments, timestamp);
+              const adjusted = adjustTimestampWithinSegment(timestamp, segment);
+              return { index: index + 1, timestamp: adjusted, imagePath: "", segment };
+            }),
+            settings.maxSlides,
+            warnings,
+          );
+        }
+
+        if (trimmed.length === 0) {
           throw new Error("No slides detected; try adjusting slide extraction settings.");
         }
-        const sceneSegments = buildSceneSegments(detection.timestamps, detection.durationSeconds);
-        const selected = interval?.timestamps.length
-          ? selectTimestampTargets({
-              targets: interval.timestamps,
-              sceneTimestamps: detection.timestamps,
-              minDurationSeconds: settings.minDurationSeconds,
-              intervalSeconds: interval.intervalSeconds,
-            })
-          : combined;
-        const spaced = filterTimestampsByMinDuration(selected, settings.minDurationSeconds);
-        const trimmed = applyMaxSlidesFilter(
-          spaced.map((timestamp, index) => {
-            const segment = findSceneSegment(sceneSegments, timestamp);
-            const adjusted = adjustTimestampWithinSegment(timestamp, segment);
-            return { index: index + 1, timestamp: adjusted, imagePath: "", segment };
-          }),
-          settings.maxSlides,
-          warnings,
-        );
 
         const timelineSlides: SlideExtractionResult = {
           sourceUrl: source.url,
@@ -588,7 +667,7 @@ export async function extractSlidesForSource({
           slidesDirId: buildSlidesDirId(slidesDir),
           sceneThreshold: settings.sceneThreshold,
           autoTuneThreshold: settings.autoTuneThreshold,
-          autoTune: detection.autoTune,
+          autoTune: detection?.autoTune ?? { enabled: false, chosenThreshold: settings.sceneThreshold, confidence: 0, strategy: "none" },
           maxSlides: settings.maxSlides,
           minSlideDuration: settings.minDurationSeconds,
           ocrRequested: settings.ocr,
@@ -633,7 +712,7 @@ export async function extractSlidesForSource({
             outputDir: slidesDir,
             timestamps: trimmed.map((slide) => slide.timestamp),
             segments: trimmed.map((slide) => slide.segment ?? null),
-            durationSeconds: detection.durationSeconds,
+            durationSeconds: detection?.durationSeconds ?? null,
             timeoutMs,
             workers,
             onProgress: reportFrameProgress,
@@ -722,7 +801,9 @@ export async function extractSlidesForSource({
           }
         }
 
-        const chapters = await chaptersPromise;
+        const ytDlpChapters = await chaptersPromise;
+        // Prefer Gemini chapters (visual analysis) over yt-dlp chapters, but use yt-dlp as fallback.
+        const chapters = geminiChapters ?? ytDlpChapters;
 
         const result: SlideExtractionResult = {
           sourceUrl: source.url,
@@ -732,7 +813,7 @@ export async function extractSlidesForSource({
           slidesDirId: buildSlidesDirId(slidesDir),
           sceneThreshold: settings.sceneThreshold,
           autoTuneThreshold: settings.autoTuneThreshold,
-          autoTune: detection.autoTune,
+          autoTune: detection?.autoTune ?? { enabled: false, chosenThreshold: settings.sceneThreshold, confidence: 0, strategy: "none" },
           maxSlides: settings.maxSlides,
           minSlideDuration: settings.minDurationSeconds,
           ocrRequested: settings.ocr,
