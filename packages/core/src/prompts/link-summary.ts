@@ -13,6 +13,28 @@ const HEADING_LENGTH_CHAR_THRESHOLD = 6000;
 
 export { SUMMARY_LENGTH_TO_TOKENS };
 
+function formatChapterTimestamp(seconds: number): string {
+  const clamped = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const secs = clamped % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(secs).padStart(2, "0");
+  if (hours <= 0) return `${minutes}:${ss}`;
+  const hh = String(hours).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function formatChaptersBlock(
+  chapters: { startTime: number; endTime: number; title: string }[] | null | undefined,
+): string | null {
+  if (!chapters || chapters.length === 0) return null;
+  const lines = chapters.map(
+    (ch) => `- [${formatChapterTimestamp(ch.startTime)}] ${ch.title}`,
+  );
+  return `Video chapters:\n${lines.join("\n")}`;
+}
+
 export type SummaryLengthTarget = SummaryLength | { maxCharacters: number };
 
 export function pickSummaryLengthForCharacters(maxCharacters: number): SummaryLength {
@@ -50,6 +72,7 @@ export function buildLinkSummaryPrompt({
   hasTranscript,
   hasTranscriptTimestamps = false,
   slides,
+  chapters,
   outputLanguage,
   summaryLength,
   shares,
@@ -66,6 +89,7 @@ export function buildLinkSummaryPrompt({
   hasTranscript: boolean;
   hasTranscriptTimestamps?: boolean;
   slides?: { count: number; text: string } | null;
+  chapters?: { startTime: number; endTime: number; title: string }[] | null;
   summaryLength: SummaryLengthTarget;
   outputLanguage?: OutputLanguage | null;
   shares: ShareContextEntry[];
@@ -74,10 +98,11 @@ export function buildLinkSummaryPrompt({
   languageInstruction?: string | null;
 }): string {
   const slidesText = slides?.text?.trim() ?? "";
-  const contentWithSlides =
-    slidesText.length > 0
-      ? `${content}\n\nSlide timeline (transcript excerpts):\n${slidesText}`
-      : content;
+  const chaptersBlock = formatChaptersBlock(chapters);
+  const contentParts = [content];
+  if (chaptersBlock) contentParts.push(chaptersBlock);
+  if (slidesText.length > 0) contentParts.push(`Slide timeline (transcript excerpts):\n${slidesText}`);
+  const contentWithSlides = contentParts.join("\n\n");
   const contentCharacters = contentWithSlides.length;
   const contextLines: string[] = [`Source URL: ${url}`];
 
@@ -204,6 +229,11 @@ export function buildLinkSummaryPrompt({
       ? "Omit sponsor messages, ads, promos, and calls-to-action (including podcast ad reads), even if they appear in the transcript or slide timeline. Do not mention or acknowledge them, and do not say you skipped or ignored anything. Avoid sponsor/ad/promo language, brand names like Squarespace, or CTA phrases like discount code. Treat them as if they do not exist. If a slide segment is purely sponsor/ad content, leave that slide marker with no text."
       : "";
 
+  const chapterInstruction =
+    chaptersBlock && !(slides && slides.count > 0)
+      ? "The content includes video chapters with timestamps. Use the chapter titles as guidance for organizing the summary into sections when appropriate. Do not reproduce the chapter list verbatim."
+      : "";
+
   const baseInstructions = [
     "Hard rules: never mention sponsor/ads; use straight quotation marks only (no curly quotes).",
     "Apostrophes in contractions are OK.",
@@ -225,6 +255,7 @@ export function buildLinkSummaryPrompt({
     "Base everything strictly on the provided content and never invent details.",
     "Final check: remove any sponsor/ad references or mentions of skipping/ignoring content. Ensure excerpts (if any) are italicized and use only straight quotes.",
     'Final check for slides: every [slide:N] must be immediately followed by a line that starts with "## ". Remove any "Title:" or "Slide" label lines.',
+    chapterInstruction,
     timestampInstruction,
     shareGuidance,
     slideInstruction,

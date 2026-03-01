@@ -35,6 +35,27 @@ export function tryGetModel(provider: KnownProvider, modelId: string): Model<Api
   }
 }
 
+/**
+ * Check whether a model supports image inputs by looking it up in the pi-ai
+ * registry.  For unknown models (not in the registry) we assume image support
+ * since most modern multimodal models accept images and the worst case is a
+ * recoverable API error.
+ *
+ * Providers like "nvidia" and "zai" are routed through the OpenAI-compatible
+ * API and are not in the pi-ai registry directly, so we map them to "openai"
+ * for the lookup.
+ */
+export function modelSupportsImages(provider: string, modelId: string): boolean {
+  // nvidia and zai use the OpenAI completions API under the hood
+  const lookupProvider: KnownProvider =
+    provider === "nvidia" || provider === "zai"
+      ? "openai"
+      : (provider as KnownProvider);
+  const model = tryGetModel(lookupProvider, modelId);
+  if (!model) return true; // assume capable for unknown models
+  return model.input.includes("image");
+}
+
 export function createSyntheticModel({
   provider,
   modelId,

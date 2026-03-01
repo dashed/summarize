@@ -2,6 +2,7 @@ import type { Context } from "@mariozechner/pi-ai";
 import { completeSimple } from "@mariozechner/pi-ai";
 import { isOpenRouterBaseUrl, normalizeBaseUrl } from "@steipete/summarize-core";
 import type { Attachment } from "../attachments.js";
+import type { PromptPart } from "../prompt.js";
 import type { LlmTokenUsage } from "../types.js";
 import type { OpenAiClientConfig } from "./types.js";
 import { createUnsupportedFunctionalityError } from "../errors.js";
@@ -214,6 +215,103 @@ export async function completeOpenAiDocument({
       usage?: unknown;
     };
     const text = extractOpenAiResponseText(data);
+    if (!text) {
+      throw new Error(`LLM returned an empty summary (model openai/${modelId}).`);
+    }
+    return { text, usage: normalizeOpenAiUsage(data.usage) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Send a chat completion request that includes `video_url` content parts.
+ *
+ * The pi-ai SDK has no concept of video content, so we build the
+ * OpenAI-compatible chat completions payload ourselves and make a raw fetch
+ * call.  This is used when the prompt contains interleaved `video_url` parts
+ * (e.g. a YouTube URL passed to Gemini via OpenRouter).
+ */
+export async function completeOpenAiTextWithVideo({
+  modelId,
+  openaiConfig,
+  system,
+  interleavedParts,
+  temperature,
+  maxOutputTokens,
+  timeoutMs,
+  fetchImpl,
+}: {
+  modelId: string;
+  openaiConfig: OpenAiClientConfig;
+  system?: string;
+  interleavedParts: PromptPart[];
+  temperature?: number;
+  maxOutputTokens?: number;
+  timeoutMs: number;
+  fetchImpl: typeof fetch;
+}): Promise<{ text: string; usage: LlmTokenUsage | null }> {
+  const baseUrl = openaiConfig.baseURL ?? "https://api.openai.com/v1";
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+
+  // Build the user message content array with text, image_url, and video_url parts.
+  const contentParts: Array<Record<string, unknown>> = [];
+  for (const part of interleavedParts) {
+    if (part.kind === "text") {
+      contentParts.push({ type: "text", text: part.text });
+    } else if (part.kind === "image") {
+      contentParts.push({
+        type: "image_url",
+        image_url: { url: `data:${part.mimeType};base64,${bytesToBase64(part.bytes)}` },
+      });
+    } else if (part.kind === "video_url") {
+      contentParts.push({
+        type: "video_url",
+        video_url: { url: part.url },
+      });
+    }
+  }
+
+  const messages: Array<Record<string, unknown>> = [];
+  if (system) {
+    messages.push({ role: "system", content: system });
+  }
+  messages.push({ role: "user", content: contentParts });
+
+  const payload: Record<string, unknown> = {
+    model: modelId,
+    messages,
+    ...(typeof temperature === "number" ? { temperature } : {}),
+    ...(typeof maxOutputTokens === "number" ? { max_tokens: maxOutputTokens } : {}),
+  };
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${openaiConfig.apiKey}`,
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      const error = new Error(`OpenAI API error (${response.status}): ${bodyText}`);
+      (error as { statusCode?: number }).statusCode = response.status;
+      (error as { responseBody?: string }).responseBody = bodyText;
+      throw error;
+    }
+
+    const data = JSON.parse(bodyText) as {
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: unknown;
+    };
+    const text = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!text) {
       throw new Error(`LLM returned an empty summary (model openai/${modelId}).`);
     }

@@ -1,8 +1,10 @@
 import { isTwitterStatusUrl, isYouTubeUrl } from "@steipete/summarize-core/content/url";
 import { countTokens } from "gpt-tokenizer";
 import { render as renderMarkdownAnsi } from "markdansi";
+import { promises as fs } from "node:fs";
+import type { Attachment } from "../../../llm/attachments.js";
 import type { ExtractedLinkContent } from "../../../content/index.js";
-import type { Prompt } from "../../../llm/prompt.js";
+import type { Prompt, PromptPart } from "../../../llm/prompt.js";
 import type { ModelAttempt } from "../../types.js";
 import type { UrlExtractionUi } from "./extract.js";
 import type { SlidesTerminalOutput } from "./slides-output.js";
@@ -176,6 +178,143 @@ function buildSlidesPromptText({
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
+/**
+ * Read slide PNG files from disk and return them as image Attachments.
+ * Silently skips slides whose image files cannot be read.
+ */
+export async function readSlideImageAttachments(
+  slides: SlidesResult | null | undefined,
+): Promise<Attachment[]> {
+  if (!slides || slides.slides.length === 0) return [];
+  const attachments: Attachment[] = [];
+  for (const slide of slides.slides) {
+    if (!slide.imagePath) continue;
+    try {
+      const bytes = await fs.readFile(slide.imagePath);
+      attachments.push({
+        kind: "image",
+        mediaType: "image/png",
+        bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+        filename: `slide_${slide.index}.png`,
+      });
+    } catch {
+      // Skip slides whose image files are missing or unreadable.
+    }
+  }
+  return attachments;
+}
+
+type VideoChapter = {
+  startTime: number;
+  endTime: number;
+  title: string;
+};
+
+/**
+ * Build interleaved prompt parts that place each slide image next to its
+ * transcript excerpt and chapter context. Returns null when there are no
+ * slide images to interleave (caller should fall back to text-only prompt).
+ */
+export async function buildMultimodalSlidesPrompt({
+  promptText,
+  slides,
+  transcriptTimedText,
+  preset,
+  sourceUrl,
+}: {
+  promptText: string;
+  slides: SlidesResult | null | undefined;
+  transcriptTimedText: string | null | undefined;
+  preset: "short" | "medium" | "long" | "xl" | "xxl";
+  sourceUrl?: string;
+}): Promise<PromptPart[] | null> {
+  if (!slides || slides.slides.length === 0) return null;
+
+  const chapters: VideoChapter[] = slides.chapters ?? [];
+  const segments = parseTranscriptTimedText(transcriptTimedText);
+  const slidesWithTimestamps = slides.slides
+    .filter((slide) => Number.isFinite(slide.timestamp) && slide.imagePath)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (slidesWithTimestamps.length === 0) return null;
+
+  // Read all slide images from disk.
+  const slideImages = new Map<number, Uint8Array>();
+  for (const slide of slidesWithTimestamps) {
+    try {
+      const buf = await fs.readFile(slide.imagePath);
+      slideImages.set(slide.index, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
+    } catch {
+      // Skip unreadable images.
+    }
+  }
+  if (slideImages.size === 0) return null;
+
+  const totalBudget = Number(MAX_SLIDE_TRANSCRIPT_CHARS_BY_PRESET[preset]);
+  const perSlideBudget = Math.max(120, Math.floor(totalBudget / Math.max(1, slidesWithTimestamps.length)));
+  let remaining = totalBudget;
+
+  // Build the interleaved parts: text prompt, optional video URL, then per-slide text+image pairs.
+  const parts: PromptPart[] = [{ kind: "text", text: promptText }];
+  if (sourceUrl) {
+    parts.push({ kind: "video_url", url: sourceUrl });
+  }
+
+  let lastChapterTitle: string | null = null;
+  for (let i = 0; i < slidesWithTimestamps.length; i += 1) {
+    const slide = slidesWithTimestamps[i];
+    if (!slide) continue;
+    const imageBytes = slideImages.get(slide.index);
+    if (!imageBytes) continue;
+
+    const prev = slidesWithTimestamps[i - 1];
+    const next = slidesWithTimestamps[i + 1];
+    const startBase = prev ? Math.floor((prev.timestamp + slide.timestamp) / 2) : slide.timestamp;
+    const endBase = next ? Math.ceil((slide.timestamp + next.timestamp) / 2) : slide.timestamp;
+    const start = Math.max(
+      0,
+      (prev ? startBase : slide.timestamp - SLIDE_TRANSCRIPT_DEFAULT_EDGE_SECONDS) -
+        SLIDE_TRANSCRIPT_LEEWAY_SECONDS,
+    );
+    const end =
+      (next ? endBase : slide.timestamp + SLIDE_TRANSCRIPT_DEFAULT_EDGE_SECONDS) +
+      SLIDE_TRANSCRIPT_LEEWAY_SECONDS;
+
+    // Find the chapter this slide belongs to.
+    const chapter = chapters.length > 0
+      ? chapters.reduce<VideoChapter | null>((best, ch) => {
+          if (slide.timestamp >= ch.startTime) return ch;
+          return best;
+        }, null)
+      : null;
+
+    // Build transcript excerpt.
+    const excerptParts: string[] = [];
+    for (const segment of segments) {
+      if (segment.startSeconds < start) continue;
+      if (segment.startSeconds > end) break;
+      excerptParts.push(segment.text);
+    }
+    const excerptRaw = excerptParts.join(" ").trim().replace(/\s+/g, " ");
+    const excerptBudget = remaining > 0 ? Math.min(perSlideBudget, remaining) : 0;
+    const excerpt = excerptRaw && excerptBudget > 0 ? truncateTranscript(excerptRaw, excerptBudget) : "";
+
+    // Build text label for this slide.
+    const chapterLabel = chapter && chapter.title !== lastChapterTitle
+      ? `\n[Chapter: ${chapter.title}]\n`
+      : "";
+    if (chapter) lastChapterTitle = chapter.title;
+    const timeRange = `[${formatTimestamp(start)}–${formatTimestamp(end)}]`;
+    const slideLabel = `${chapterLabel}[slide:${slide.index}] ${timeRange}`;
+    const blockText = excerpt ? `${slideLabel}\n${excerpt}` : slideLabel;
+    remaining = Math.max(0, remaining - blockText.length);
+
+    parts.push({ kind: "text", text: blockText });
+    parts.push({ kind: "image", bytes: imageBytes, mimeType: "image/png" });
+  }
+
+  return parts;
+}
+
 export function buildUrlPrompt({
   extracted,
   outputLanguage,
@@ -212,6 +351,7 @@ export function buildUrlPrompt({
       (extracted.transcriptSource !== null && extracted.transcriptSource !== "unavailable"),
     hasTranscriptTimestamps: Boolean(extracted.transcriptTimedText),
     slides: slidesText ? { count: slides?.slides.length ?? 0, text: slidesText } : null,
+    chapters: slides?.chapters ?? null,
     summaryLength:
       lengthArg.kind === "preset" ? lengthArg.preset : { maxCharacters: lengthArg.maxCharacters },
     outputLanguage,
@@ -619,7 +759,23 @@ export async function summarizeExtractedUrl({
     ? await readLastSuccessfulCliProvider(io.envForRun)
     : null;
 
-  const promptPayload: Prompt = { system: SUMMARY_SYSTEM_PROMPT, userText: prompt };
+  const preset = flags.lengthArg.kind === "preset" ? flags.lengthArg.preset : "medium";
+  const envVideo = io.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
+  const videoEnabled = (envVideo === "true" || envVideo === "1") && isYouTubeUrl(url);
+  const interleavedParts = await buildMultimodalSlidesPrompt({
+    promptText: prompt,
+    slides,
+    transcriptTimedText: extracted.transcriptTimedText,
+    preset,
+    ...(videoEnabled ? { sourceUrl: url } : {}),
+  });
+  const slideAttachments = interleavedParts ? [] : await readSlideImageAttachments(slides);
+  const promptPayload: Prompt = {
+    system: SUMMARY_SYSTEM_PROMPT,
+    userText: prompt,
+    ...(interleavedParts ? { interleavedParts } : {}),
+    ...(slideAttachments.length > 0 ? { attachments: slideAttachments } : {}),
+  };
   const promptTokens = countTokens(promptPayload.userText);
   const kindForAuto =
     extracted.siteName === "YouTube" ? ("youtube" as const) : ("website" as const);

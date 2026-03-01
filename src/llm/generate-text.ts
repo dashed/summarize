@@ -4,7 +4,14 @@ import type { OpenAiClientConfig } from "./providers/types.js";
 import type { LlmTokenUsage } from "./types.js";
 import { createUnsupportedFunctionalityError } from "./errors.js";
 import { parseGatewayStyleModelId } from "./model-id.js";
-import { type Prompt, userTextAndImageMessage } from "./prompt.js";
+import {
+  type Prompt,
+  hasVideoUrlParts,
+  stripVideoUrlParts,
+  userInterleavedMessage,
+  userTextAndImageMessage,
+  userTextAndImagesMessage,
+} from "./prompt.js";
 import {
   completeAnthropicDocument,
   completeAnthropicText,
@@ -22,6 +29,7 @@ import {
 import {
   completeOpenAiDocument,
   completeOpenAiText,
+  completeOpenAiTextWithVideo,
   resolveOpenAiClientConfig,
 } from "./providers/openai.js";
 import { extractText } from "./providers/shared.js";
@@ -49,25 +57,41 @@ type RetryNotice = {
 };
 
 function promptToContext(prompt: Prompt): Context {
+  // When interleaved parts are provided, they take priority over userText+attachments.
+  if (prompt.interleavedParts && prompt.interleavedParts.length > 0) {
+    const messages: Message[] = [userInterleavedMessage({ parts: prompt.interleavedParts })];
+    return { systemPrompt: prompt.system, messages };
+  }
+
   const attachments = prompt.attachments ?? [];
   if (attachments.some((attachment) => attachment.kind === "document")) {
     throw new Error("Internal error: document prompt cannot be converted to context.");
   }
-  if (attachments.length === 0) {
+  const imageAttachments = attachments.filter((a) => a.kind === "image");
+  if (imageAttachments.length !== attachments.length) {
+    throw new Error("Internal error: non-image attachments cannot be converted to context.");
+  }
+  if (imageAttachments.length === 0) {
     return {
       systemPrompt: prompt.system,
       messages: [{ role: "user", content: prompt.userText, timestamp: Date.now() }],
     };
   }
-  if (attachments.length !== 1 || attachments[0]?.kind !== "image") {
-    throw new Error("Internal error: only single image attachments are supported for prompts.");
+  if (imageAttachments.length === 1) {
+    const attachment = imageAttachments[0]!;
+    const messages: Message[] = [
+      userTextAndImageMessage({
+        text: prompt.userText,
+        imageBytes: attachment.bytes,
+        mimeType: attachment.mediaType,
+      }),
+    ];
+    return { systemPrompt: prompt.system, messages };
   }
-  const attachment = attachments[0];
   const messages: Message[] = [
-    userTextAndImageMessage({
+    userTextAndImagesMessage({
       text: prompt.userText,
-      imageBytes: attachment.bytes,
-      mimeType: attachment.mediaType,
+      images: imageAttachments.map((a) => ({ imageBytes: a.bytes, mimeType: a.mediaType })),
     }),
   ];
   return { systemPrompt: prompt.system, messages };
@@ -286,6 +310,45 @@ export async function generateTextWithModelId({
     );
   }
 
+  // Handle prompts that contain video_url parts (e.g. YouTube URL for Gemini).
+  // The pi-ai SDK has no video content type, so we use a raw fetch path for
+  // OpenAI-compatible APIs (including OpenRouter).  For other providers we
+  // strip the video parts and fall through to the normal path.
+  if (hasVideoUrlParts(prompt)) {
+    if (parsed.provider === "openai") {
+      const openaiConfig = resolveOpenAiClientConfig({
+        apiKeys: {
+          openaiApiKey: apiKeys.openaiApiKey,
+          openrouterApiKey: apiKeys.openrouterApiKey,
+        },
+        forceOpenRouter,
+        openaiBaseUrlOverride,
+        forceChatCompletions,
+      });
+      const result = await completeOpenAiTextWithVideo({
+        modelId: parsed.model,
+        openaiConfig,
+        system: prompt.system,
+        interleavedParts: prompt.interleavedParts!,
+        temperature: effectiveTemperature,
+        maxOutputTokens,
+        timeoutMs,
+        fetchImpl,
+      });
+      return {
+        text: result.text,
+        canonicalModelId: parsed.canonical,
+        provider: parsed.provider,
+        usage: result.usage,
+      };
+    }
+    // For non-OpenAI providers, strip video_url parts and continue with normal path.
+    const strippedParts = prompt.interleavedParts
+      ? stripVideoUrlParts(prompt.interleavedParts)
+      : undefined;
+    prompt = { ...prompt, interleavedParts: strippedParts };
+  }
+
   const context = promptToContext(prompt);
 
   const resolveOpenAiConfig = (): OpenAiClientConfig =>
@@ -501,7 +564,12 @@ export async function streamTextWithModelId({
   usage: Promise<LlmTokenUsage | null>;
   lastError: () => unknown;
 }> {
-  const context = promptToContext(prompt);
+  // Strip video_url parts for streaming — video is only supported via the raw
+  // non-streaming fetch path in generateTextWithModelId.
+  const effectivePrompt = hasVideoUrlParts(prompt)
+    ? { ...prompt, interleavedParts: stripVideoUrlParts(prompt.interleavedParts!) }
+    : prompt;
+  const context = promptToContext(effectivePrompt);
   return streamTextWithContext({
     modelId,
     apiKeys,

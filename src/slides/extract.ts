@@ -11,6 +11,7 @@ import type {
   SlideImage,
   SlideSource,
   SlideSourceKind,
+  VideoChapter,
 } from "./types.js";
 import { extractYouTubeVideoId, isDirectMediaUrl, isYouTubeUrl } from "../content/index.js";
 import { spawnTracked } from "../processes.js";
@@ -25,6 +26,7 @@ import {
 const FFMPEG_TIMEOUT_FALLBACK_MS = 300_000;
 const slidesLocks = new Map<string, Promise<void>>();
 const YT_DLP_TIMEOUT_MS = 300_000;
+const YT_DLP_METADATA_TIMEOUT_MS = 30_000;
 const TESSERACT_TIMEOUT_MS = 120_000;
 const DEFAULT_SLIDES_WORKERS = 8;
 const DEFAULT_SLIDES_SAMPLE_COUNT = 8;
@@ -88,6 +90,54 @@ export function buildYtDlpCookiesArgs({
   if (file.length > 0) return ["--cookies", file];
   const browser = typeof cookiesFromBrowser === "string" ? cookiesFromBrowser.trim() : "";
   return browser.length > 0 ? ["--cookies-from-browser", browser] : [];
+}
+
+export async function extractYouTubeChapters({
+  ytDlpPath,
+  url,
+  cookiesFile,
+  cookiesFromBrowser,
+  timeoutMs = YT_DLP_METADATA_TIMEOUT_MS,
+}: {
+  ytDlpPath: string;
+  url: string;
+  cookiesFile?: string | null;
+  cookiesFromBrowser?: string | null;
+  timeoutMs?: number;
+}): Promise<VideoChapter[] | null> {
+  const args = [
+    "--dump-json",
+    "--no-download",
+    "--no-playlist",
+    "--no-warnings",
+    "--remote-components",
+    "ejs:github",
+    ...buildYtDlpCookiesArgs({ cookiesFile, cookiesFromBrowser }),
+    url,
+  ];
+  const stdout = await runProcessCapture({
+    command: ytDlpPath,
+    args,
+    timeoutMs,
+    errorLabel: "yt-dlp-chapters",
+  });
+  try {
+    const meta = JSON.parse(stdout) as { chapters?: unknown };
+    if (!Array.isArray(meta.chapters) || meta.chapters.length === 0) return null;
+    const chapters: VideoChapter[] = [];
+    for (const raw of meta.chapters) {
+      if (raw == null || typeof raw !== "object") continue;
+      const entry = raw as Record<string, unknown>;
+      const startTime = Number(entry.start_time);
+      const endTime = Number(entry.end_time);
+      const title = typeof entry.title === "string" ? entry.title.trim() : "";
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || !title) continue;
+      chapters.push({ startTime, endTime, title });
+    }
+    return chapters.length > 0 ? chapters : null;
+  } catch {
+    return null;
+  }
 }
 
 function buildSlidesMediaCacheKey(url: string): string {
@@ -305,6 +355,18 @@ export async function extractSlidesForSource({
         logSlidesTiming("prepare output dir", prepareStartedAt);
       }
       reportSlidesProgress?.("preparing source", P_PREPARE);
+
+      // Kick off chapter extraction in parallel with the video download.
+      // Chapters are optional — failures are silently ignored.
+      const chaptersPromise: Promise<VideoChapter[] | null> =
+        source.kind === "youtube" && ytDlpPath
+          ? extractYouTubeChapters({
+              ytDlpPath,
+              url: source.url,
+              cookiesFile: ytDlpCookiesFile,
+              cookiesFromBrowser: ytDlpCookiesFromBrowser,
+            }).catch(() => null)
+          : Promise.resolve(null);
 
       const allowStreamFallback = resolveSlidesStreamFallback(env);
       let inputPath = source.url;
@@ -660,6 +722,8 @@ export async function extractSlidesForSource({
           }
         }
 
+        const chapters = await chaptersPromise;
+
         const result: SlideExtractionResult = {
           sourceUrl: source.url,
           sourceKind: source.kind,
@@ -674,6 +738,7 @@ export async function extractSlidesForSource({
           ocrRequested: settings.ocr,
           ocrAvailable,
           slides: slidesWithOcr,
+          chapters,
           warnings,
         };
 

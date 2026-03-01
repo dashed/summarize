@@ -1,6 +1,7 @@
 export {
   buildYtDlpCookiesArgs,
   extractSlidesForSource,
+  extractYouTubeChapters,
   parseShowinfoTimestamp,
   resolveExtractedTimestamp,
   resolveSlideSource,
@@ -22,4 +23,5 @@ export type {
   SlideImage,
   SlideSource,
   SlideSourceKind,
+  VideoChapter,
 } from "./types.js";
