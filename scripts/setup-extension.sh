@@ -252,6 +252,15 @@ fi
 # ---------------------------------------------------------------------------
 # Step 7: Reinstall daemon
 # ---------------------------------------------------------------------------
+# On WSL, systemctl --user requires /run/user/<uid> which is created by
+# systemd at boot. If the directory is missing, the user needs to restart WSL.
+if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+  if [[ ! -d "/run/user/$(id -u)" ]]; then
+    die "systemd user session not available (/run/user/$(id -u) missing).
+  Run 'wsl --shutdown' from Windows PowerShell, then reopen your WSL terminal."
+  fi
+fi
+
 info "Installing daemon (captures env snapshot)…"
 summarize daemon install --token "$TOKEN"
 ok "Daemon installed"
