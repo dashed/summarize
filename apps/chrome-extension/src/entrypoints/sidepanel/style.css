@@ -2732,6 +2732,22 @@ button.setup__pill.isActive {
   border-color: color-mix(in srgb, var(--ui-focus) 35%, var(--border));
 }
 
+.historyItem.isCurrent {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.historyItem__badge {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 .historyItem__title {
   font-weight: 600;
   font-size: 12px;

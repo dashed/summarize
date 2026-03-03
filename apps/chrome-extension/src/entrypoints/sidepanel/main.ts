@@ -298,6 +298,7 @@ let preserveChatOnNextReset = false;
 let summarizeVideoLabel = "Video";
 let historyMode: "summaries" | "chats" = "summaries";
 let historyOpen = false;
+let loadedHistoryKey: string | null = null;
 let summarizePageWords: number | null = null;
 let summarizeVideoDurationSeconds: number | null = null;
 
@@ -3869,6 +3870,7 @@ function handleBgMessage(msg: BgToPanel) {
       stopSlidesStream();
       setPhase("connecting");
       lastAction = "summarize";
+      loadedHistoryKey = null;
       window.clearTimeout(autoKickTimer);
       if (panelState.chatStreaming) {
         finishStreamingMessage();
@@ -4115,7 +4117,16 @@ async function loadHistory() {
       }>;
     };
     const entries = data.summaries ?? data.chats ?? [];
-    renderHistoryList(entries);
+    const hasSummaryDisplayed =
+      panelState.summaryMarkdown != null && panelState.phase === "idle";
+    const hasChatActive = chatController.getMessages().length > 0;
+    const currentKey =
+      historyMode === "summaries" ? (loadedHistoryKey ?? null) : null;
+    const markFirstAsCurrent =
+      historyMode === "summaries"
+        ? hasSummaryDisplayed && !loadedHistoryKey
+        : hasChatActive;
+    renderHistoryList(entries, currentKey, markFirstAsCurrent);
   } catch {
     historyListEl.innerHTML = '<div class="historyEmpty">Could not load history</div>';
   }
@@ -4128,6 +4139,8 @@ function renderHistoryList(
     size_bytes: number;
     metadata: Record<string, unknown> | null;
   }>,
+  currentKey: string | null = null,
+  markFirstAsCurrent = false,
 ) {
   if (entries.length === 0) {
     historyListEl.innerHTML = "";
@@ -4137,7 +4150,7 @@ function renderHistoryList(
   historyEmptyEl.classList.add("hidden");
 
   historyListEl.innerHTML = entries
-    .map((entry) => {
+    .map((entry, index) => {
       const meta = entry.metadata ?? {};
       const date = new Date(entry.created_at).toLocaleDateString(undefined, {
         month: "short",
@@ -4149,9 +4162,11 @@ function renderHistoryList(
       const url = String(meta.url || "");
       const model = String(meta.model || "");
       const chars = (meta.summaryChars as number) || entry.size_bytes;
+      const isCurrent =
+        entry.key === currentKey || (markFirstAsCurrent && index === 0);
 
-      return `<button class="historyItem" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
-      <div class="historyItem__title">${escapeHtml(truncate(title, 60))}</div>
+      return `<button class="historyItem${isCurrent ? " isCurrent" : ""}" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
+      <div class="historyItem__title">${escapeHtml(truncate(title, 60))}${isCurrent ? ' <span class="historyItem__badge">Current</span>' : ""}</div>
       <div class="historyItem__meta">
         <span class="historyItem__date">${date}</span>
         ${model ? `<span class="historyItem__model">${escapeHtml(model)}</span>` : ""}
@@ -4185,6 +4200,7 @@ async function loadHistoryEntry(key: string, mode: string) {
         metadata?: Record<string, unknown> | null;
       };
       if (data.ok && data.value) {
+        loadedHistoryKey = key;
         historyOpen = false;
         historyPanelEl.classList.add("hidden");
         historyToggleBtn.classList.remove("isActive");
