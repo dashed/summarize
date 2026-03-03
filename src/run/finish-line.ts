@@ -22,7 +22,7 @@ export type FinishLineModel = {
 };
 
 export type ExtractDiagnosticsForFinishLine = {
-  strategy: "bird" | "firecrawl" | "html" | "nitter";
+  strategy: "bird" | "firecrawl" | "html" | "nitter" | "pdf";
   firecrawl: { used: boolean };
   markdown: { used: boolean; provider: "firecrawl" | "llm" | null; notes?: string | null };
   transcript: { textProvided: boolean; provider: string | null };

@@ -6,7 +6,12 @@ import { resolveTranscriptionConfig } from "../../transcript/transcription-confi
 import { isDirectMediaUrl, isYouTubeUrl } from "../../url.js";
 import { normalizeForPrompt } from "./cleaner.js";
 import { MIN_READABILITY_CONTENT_CHARACTERS } from "./constants.js";
-import { fetchHtmlDocument, fetchWithFirecrawl } from "./fetcher.js";
+import {
+  fetchHtmlDocument,
+  fetchPdfText,
+  fetchWithFirecrawl,
+  isPdfContentTypeError,
+} from "./fetcher.js";
 import { buildResultFromFirecrawl, shouldFallbackToFirecrawl } from "./firecrawl.js";
 import { buildResultFromHtmlDocument } from "./html.js";
 import { extractApplePodcastIds, extractSpotifyEpisodeId } from "./podcast-utils.js";
@@ -537,6 +542,46 @@ export async function fetchLinkContent(
       onProgress: deps.onProgress ?? null,
     });
   } catch (error) {
+    if (isPdfContentTypeError(error)) {
+      try {
+        const pdfResult = await fetchPdfText(deps.fetch, url, {
+          timeoutMs,
+          onProgress: deps.onProgress ?? null,
+        });
+        const noTranscript: TranscriptResolution = { text: null, source: null };
+        return finalizeExtractedLinkContent({
+          url: pdfResult.finalUrl,
+          baseContent: pdfResult.text,
+          maxCharacters,
+          title: null,
+          description: null,
+          siteName: null,
+          transcriptResolution: noTranscript,
+          video: null,
+          isVideoOnly: false,
+          diagnostics: {
+            strategy: "pdf",
+            firecrawl: firecrawlDiagnostics,
+            markdown: {
+              requested: markdownRequested,
+              used: false,
+              provider: null,
+              notes: "PDF text extraction",
+            },
+            transcript: {
+              cacheMode,
+              cacheStatus: "unknown",
+              textProvided: false,
+              provider: null,
+              attemptedProviders: [],
+              notes: "PDF short-circuit skipped transcript",
+            },
+          },
+        });
+      } catch {
+        // PDF text extraction failed — fall through to Firecrawl or error
+      }
+    }
     htmlError = error;
   }
 
