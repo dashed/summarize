@@ -1160,6 +1160,8 @@ export async function summarizeExtractedUrl({
       length: lengthKey,
       language: languageKey,
       url,
+      title: extracted.title ?? null,
+      siteName: extracted.siteName ?? null,
       summaryChars: summaryResult.summary.length,
       prompt,
       systemPrompt: SUMMARY_SYSTEM_PROMPT,

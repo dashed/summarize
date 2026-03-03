@@ -595,4 +595,101 @@ describe("cache store", () => {
 
     store.close();
   });
+
+  it("stores and retrieves title and siteName in metadata", async () => {
+    const root = mkdtempSync(join(tmpdir(), "summarize-cache-"));
+    const path = join(root, "cache.sqlite");
+    const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
+
+    const meta = {
+      model: "google/gemini-3-flash",
+      url: "https://www.youtube.com/watch?v=abc123",
+      title: "How to Build a Rocket",
+      siteName: "YouTube",
+      length: "preset:xl",
+      language: "auto",
+      summaryChars: 5000,
+    };
+    store.setText("summary", "yt-key", "summary text here", null, meta);
+
+    const entry = store.getEntryWithMeta("summary", "yt-key");
+    expect(entry).not.toBeNull();
+    expect(entry!.metadata).not.toBeNull();
+    expect(entry!.metadata!.title).toBe("How to Build a Rocket");
+    expect(entry!.metadata!.siteName).toBe("YouTube");
+    expect(entry!.metadata!.url).toBe("https://www.youtube.com/watch?v=abc123");
+
+    store.close();
+  });
+
+  it("listEntries returns title in metadata for history display", async () => {
+    const root = mkdtempSync(join(tmpdir(), "summarize-cache-"));
+    const path = join(root, "cache.sqlite");
+    const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
+
+    store.setText("summary", "k1", "text1", null, {
+      url: "https://example.com/article",
+      title: "Great Article",
+      model: "gemini",
+    });
+    store.setText("summary", "k2", "text2", null, {
+      url: "https://www.youtube.com/watch?v=xyz",
+      title: "Cool Video",
+      siteName: "YouTube",
+      model: "gemini",
+    });
+    store.setText("summary", "k3", "text3", null, {
+      url: "https://example.com/no-title",
+      model: "gemini",
+    });
+
+    const entries = store.listEntries("summary", { limit: 10 });
+    expect(entries).toHaveLength(3);
+
+    const withTitle = entries.find((e) => e.key === "k1");
+    expect(withTitle?.metadata?.title).toBe("Great Article");
+
+    const withSiteName = entries.find((e) => e.key === "k2");
+    expect(withSiteName?.metadata?.title).toBe("Cool Video");
+    expect(withSiteName?.metadata?.siteName).toBe("YouTube");
+
+    const noTitle = entries.find((e) => e.key === "k3");
+    expect(noTitle?.metadata?.title).toBeUndefined();
+    expect(noTitle?.metadata?.url).toBe("https://example.com/no-title");
+
+    store.close();
+  });
+
+  it("metadata title fallback chain: title > url > Unknown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "summarize-cache-"));
+    const path = join(root, "cache.sqlite");
+    const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
+
+    // Entry with title
+    store.setText("summary", "has-title", "text", null, {
+      title: "My Page Title",
+      url: "https://example.com",
+    });
+    // Entry with only url
+    store.setText("summary", "has-url", "text", null, {
+      url: "https://example.com/page",
+    });
+    // Entry with no metadata
+    store.setText("summary", "no-meta", "text", null);
+
+    // Simulate the extension's title resolution logic
+    const resolve = (meta: Record<string, unknown> | null) =>
+      String(meta?.title || meta?.url || "Unknown");
+
+    const e1 = store.getEntryWithMeta("summary", "has-title");
+    expect(resolve(e1?.metadata ?? null)).toBe("My Page Title");
+
+    const e2 = store.getEntryWithMeta("summary", "has-url");
+    expect(resolve(e2?.metadata ?? null)).toBe("https://example.com/page");
+
+    const e3 = store.getEntryWithMeta("summary", "no-meta");
+    expect(resolve(e3?.metadata ?? null)).toBe("Unknown");
+
+    store.close();
+  });
 });
