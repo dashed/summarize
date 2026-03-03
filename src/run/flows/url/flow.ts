@@ -659,6 +659,8 @@ export async function runUrlFlow({
             sourceKind: "asset-url",
             sourceLabel: loadedVideo.sourceLabel,
             attachment: loadedVideo.attachment,
+            url,
+            title: extracted.title ?? null,
             onModelChosen: (modelId) => {
               chosenModel = modelId;
               hooks.onModelChosen?.(modelId);

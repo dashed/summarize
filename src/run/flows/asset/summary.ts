@@ -291,6 +291,8 @@ export type SummarizeAssetArgs = {
   sourceLabel: string;
   attachment: AssetAttachment;
   onModelChosen?: ((modelId: string) => void) | null;
+  url?: string | null;
+  title?: string | null;
 };
 
 export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAssetArgs) {
@@ -685,6 +687,8 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       model: usedAttempt.userModelId,
       length: lengthKey,
       language: languageKey,
+      url: args.url ?? null,
+      title: args.title ?? null,
       summaryChars: summaryResult.summary.length,
       prompt: promptText,
       systemPrompt: SUMMARY_SYSTEM_PROMPT,

@@ -596,6 +596,49 @@ describe("cache store", () => {
     store.close();
   });
 
+  it("asset-style metadata includes url and title when provided", async () => {
+    const root = mkdtempSync(join(tmpdir(), "summarize-cache-"));
+    const path = join(root, "cache.sqlite");
+    const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
+
+    // Simulates asset flow cache write with url/title (called from URL flow)
+    const metaWithUrl = {
+      model: "google/gemini-3-flash",
+      length: "preset:xl",
+      language: "auto",
+      url: "https://example.com/video.mp4",
+      title: "Cool Video File",
+      summaryChars: 3000,
+    };
+    store.setText("summary", "asset-with-url", "asset summary", null, metaWithUrl);
+
+    // Simulates asset flow cache write without url/title (CLI file path)
+    const metaWithoutUrl = {
+      model: "google/gemini-3-flash",
+      length: "preset:xl",
+      language: "auto",
+      url: null,
+      title: null,
+      summaryChars: 2000,
+    };
+    store.setText("summary", "asset-no-url", "file summary", null, metaWithoutUrl);
+
+    const entry1 = store.getEntryWithMeta("summary", "asset-with-url");
+    expect(entry1?.metadata?.url).toBe("https://example.com/video.mp4");
+    expect(entry1?.metadata?.title).toBe("Cool Video File");
+
+    const entry2 = store.getEntryWithMeta("summary", "asset-no-url");
+    expect(entry2?.metadata?.url).toBeNull();
+    expect(entry2?.metadata?.title).toBeNull();
+
+    // URL-filtered history should find the first entry but not the second
+    const filtered = store.listEntries("summary", { filterUrl: "https://example.com/video" });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].key).toBe("asset-with-url");
+
+    store.close();
+  });
+
   it("stores and retrieves title and siteName in metadata", async () => {
     const root = mkdtempSync(join(tmpdir(), "summarize-cache-"));
     const path = join(root, "cache.sqlite");
