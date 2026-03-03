@@ -10,4 +10,5 @@ export const SUMMARY_SYSTEM_PROMPT = [
   "If you include exact excerpts, italicize them in Markdown using single asterisks.",
   "Include 1-2 short exact excerpts (max 25 words each) when the content provides a strong, non-sponsor line.",
   "Never include ad/sponsor/boilerplate excerpts.",
+  "When the content contains mathematical expressions, formulas, or equations, render them using LaTeX math notation: $...$ for inline math and $$...$$ for display/block math. The output supports KaTeX rendering.",
 ].join("\n");

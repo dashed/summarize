@@ -18,9 +18,11 @@
   },
   "dependencies": {
     "@mozilla/readability": "0.6.0",
+    "@traptitech/markdown-it-katex": "^3.6.0",
     "@zag-js/checkbox": "^1.33.1",
     "@zag-js/preact": "^1.33.1",
     "@zag-js/select": "^1.33.1",
+    "katex": "^0.16.33",
     "markdown-it": "^14.1.1",
     "preact": "11.0.0-experimental.1"
   },

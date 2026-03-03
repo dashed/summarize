@@ -2,6 +2,8 @@ import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "@ma
 import { extractYouTubeVideoId, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { SUMMARY_LENGTH_SPECS } from "@steipete/summarize-core/prompts";
 import MarkdownIt from "markdown-it";
+import katexPlugin from "@traptitech/markdown-it-katex";
+import "katex/dist/katex.min.css";
 import type { SummaryLength } from "../../../../../src/shared/contracts.js";
 import type { ChatMessage, PanelPhase, PanelState, RunStart, UiState } from "./types";
 import {
@@ -246,6 +248,7 @@ const slideTagPlugin = (markdown: MarkdownIt) => {
 };
 
 md.use(slideTagPlugin);
+md.use(katexPlugin, { throwOnError: false });
 
 const panelState: PanelState = {
   ui: null,
@@ -4134,8 +4137,7 @@ async function loadHistory() {
       }>;
     };
     const entries = data.summaries ?? data.chats ?? [];
-    const hasSummaryDisplayed =
-      panelState.summaryMarkdown != null && panelState.phase === "idle";
+    const hasSummaryDisplayed = panelState.summaryMarkdown != null && panelState.phase === "idle";
     const hasChatActive = chatController.getMessages().length > 0;
     const currentKey = resolveCurrentKey(historyMode, loadedHistoryKey);
     const markFirst = shouldMarkFirstAsCurrent(

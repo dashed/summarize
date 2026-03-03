@@ -7,7 +7,8 @@ import { resolveRunContextState } from "../run/run-context.js";
 import { resolveModelSelection } from "../run/run-models.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
 
-const YOUTUBE_RE = /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/watch|youtu\.be\/|youtube\.com\/live\/)/i;
+const YOUTUBE_RE =
+  /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/watch|youtu\.be\/|youtube\.com\/live\/)/i;
 
 export function isYouTubeUrl(url: string): boolean {
   return YOUTUBE_RE.test(url);
@@ -30,6 +31,9 @@ Professional, concise, pragmatic. Use "I" for your actions. Match the user's ton
 - summarize: run Summarize on a URL (summary or extract text/markdown)
 - debugger: main-world eval (last resort; shows debugger banner)
 
+# Math
+When discussing mathematical content, use LaTeX notation: $...$ for inline math and $$...$$ for display/block math. The output supports KaTeX rendering.
+
 # Critical Rules
 - Navigation: ONLY use navigate() (or navigate tool). Never use window.location/history in code.
 - Tool outputs are hidden from the user. If you use tool data, repeat the relevant parts in your response.
@@ -44,6 +48,9 @@ Answer questions about the current page content. You cannot use tools or automat
 
 # Tone
 Professional, concise, pragmatic. Use "I" for your actions. Match the user's tone. No emojis.
+
+# Math
+When discussing mathematical content, use LaTeX notation: $...$ for inline math and $$...$$ for display/block math. The output supports KaTeX rendering.
 
 # Constraints
 - Do not claim you clicked, browsed, or executed tools.
@@ -615,21 +622,18 @@ async function streamAgentWithVideo({
 
   // Convert pi-ai messages to OpenAI format, injecting video_url in the first
   // user message.
-  const oaiMessages: Array<Record<string, unknown>> = [
-    { role: "system", content: systemPrompt },
-  ];
+  const oaiMessages: Array<Record<string, unknown>> = [{ role: "system", content: systemPrompt }];
   let videoInjected = false;
   for (const msg of messages) {
     if (msg.role === "user") {
-      const text = typeof msg.content === "string"
-        ? msg.content
-        : (msg.content as Array<{ type: string; text?: string }>)
-            .filter((p) => p.type === "text")
-            .map((p) => p.text ?? "")
-            .join("");
-      const contentParts: Array<Record<string, unknown>> = [
-        { type: "text", text },
-      ];
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : (msg.content as Array<{ type: string; text?: string }>)
+              .filter((p) => p.type === "text")
+              .map((p) => p.text ?? "")
+              .join("");
+      const contentParts: Array<Record<string, unknown>> = [{ type: "text", text }];
       if (!videoInjected) {
         contentParts.push({
           type: "video_url",
@@ -656,9 +660,7 @@ async function streamAgentWithVideo({
     stream: true,
     ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
     // Force Google AI Studio — Vertex does not support YouTube video_url parts.
-    ...(isOpenRouter
-      ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } }
-      : {}),
+    ...(isOpenRouter ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } } : {}),
   };
 
   console.error(
@@ -788,10 +790,7 @@ export async function streamAgentResponse({
 
   // For YouTube videos on OpenRouter (Gemini) without automation tools,
   // use a raw streaming fetch that includes the video_url multimodal part.
-  const useVideoPath =
-    isYouTubeUrl(pageUrl) &&
-    !automationEnabled &&
-    provider === "openrouter";
+  const useVideoPath = isYouTubeUrl(pageUrl) && !automationEnabled && provider === "openrouter";
 
   console.error(
     `[video-debug] streamAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
@@ -824,7 +823,14 @@ export async function streamAgentResponse({
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
       stopReason: "stop",
       timestamp: Date.now(),
     };
@@ -915,10 +921,7 @@ export async function completeAgentResponse({
 
   // For YouTube videos on OpenRouter (Gemini) without automation tools,
   // use a raw fetch that includes the video_url multimodal part.
-  const useVideoPath =
-    isYouTubeUrl(pageUrl) &&
-    !automationEnabled &&
-    provider === "openrouter";
+  const useVideoPath = isYouTubeUrl(pageUrl) && !automationEnabled && provider === "openrouter";
 
   console.error(
     `[video-debug] completeAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
@@ -938,7 +941,9 @@ export async function completeAgentResponse({
       videoUrl: pageUrl,
       maxOutputTokens,
       reasoning,
-      onChunk: (text) => { fullText += text; },
+      onChunk: (text) => {
+        fullText += text;
+      },
     });
 
     return {
@@ -947,7 +952,14 @@ export async function completeAgentResponse({
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
       stopReason: "stop",
       timestamp: Date.now(),
     } as AssistantMessage;
