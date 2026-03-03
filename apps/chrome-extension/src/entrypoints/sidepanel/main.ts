@@ -34,6 +34,7 @@ import { ChatController } from "./chat-controller";
 import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
+import { isCurrentEntry, resolveCurrentKey, shouldMarkFirstAsCurrent } from "./history-utils";
 import {
   createPanelCacheController,
   resolveRestoreAction,
@@ -671,9 +672,6 @@ async function handleSummarizeControlChange(value: { mode: "page" | "video"; sli
   if (slidesEnabledValue && (inputModeOverride ?? inputMode) === "video") {
     maybeApplyPendingSlidesSummary();
     maybeStartPendingSlidesForUrl(activeTabUrl ?? null);
-  }
-  if (autoValue && (value.mode !== prevMode || value.slides !== prevSlides)) {
-    sendSummarize({ refresh: true });
   }
   refreshSummarizeControl();
 }
@@ -4120,13 +4118,14 @@ async function loadHistory() {
     const hasSummaryDisplayed =
       panelState.summaryMarkdown != null && panelState.phase === "idle";
     const hasChatActive = chatController.getMessages().length > 0;
-    const currentKey =
-      historyMode === "summaries" ? (loadedHistoryKey ?? null) : null;
-    const markFirstAsCurrent =
-      historyMode === "summaries"
-        ? hasSummaryDisplayed && !loadedHistoryKey
-        : hasChatActive;
-    renderHistoryList(entries, currentKey, markFirstAsCurrent);
+    const currentKey = resolveCurrentKey(historyMode, loadedHistoryKey);
+    const markFirst = shouldMarkFirstAsCurrent(
+      historyMode,
+      hasSummaryDisplayed,
+      loadedHistoryKey,
+      hasChatActive,
+    );
+    renderHistoryList(entries, currentKey, markFirst);
   } catch {
     historyListEl.innerHTML = '<div class="historyEmpty">Could not load history</div>';
   }
@@ -4162,8 +4161,7 @@ function renderHistoryList(
       const url = String(meta.url || "");
       const model = String(meta.model || "");
       const chars = (meta.summaryChars as number) || entry.size_bytes;
-      const isCurrent =
-        entry.key === currentKey || (markFirstAsCurrent && index === 0);
+      const isCurrent = isCurrentEntry(entry.key, index, currentKey, markFirstAsCurrent);
 
       return `<button class="historyItem${isCurrent ? " isCurrent" : ""}" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
       <div class="historyItem__title">${escapeHtml(truncate(title, 60))}${isCurrent ? ' <span class="historyItem__badge">Current</span>' : ""}</div>

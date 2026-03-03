@@ -1,0 +1,50 @@
+/**
+ * Pure utility functions for the history panel.
+ * Extracted from main.ts for testability.
+ */
+
+/**
+ * Determines the "current key" to highlight in the history list.
+ *
+ * - In "summaries" mode, returns the key of the history entry that was
+ *   explicitly loaded (loadedHistoryKey) or null.
+ * - In "chats" mode, there's no explicit key tracking — returns null.
+ */
+export function resolveCurrentKey(
+  historyMode: "summaries" | "chats",
+  loadedHistoryKey: string | null,
+): string | null {
+  return historyMode === "summaries" ? (loadedHistoryKey ?? null) : null;
+}
+
+/**
+ * Determines whether the first entry in the history list should be
+ * marked as "current" (i.e. the live/most recent item).
+ *
+ * - In "summaries" mode: mark first as current when a summary is
+ *   displayed AND no explicit history entry was loaded (meaning the
+ *   displayed summary is the live one, not from history).
+ * - In "chats" mode: mark first as current when a chat session is active.
+ */
+export function shouldMarkFirstAsCurrent(
+  historyMode: "summaries" | "chats",
+  hasSummaryDisplayed: boolean,
+  loadedHistoryKey: string | null,
+  hasChatActive: boolean,
+): boolean {
+  return historyMode === "summaries"
+    ? hasSummaryDisplayed && !loadedHistoryKey
+    : hasChatActive;
+}
+
+/**
+ * Determines whether a specific history entry is the "current" one.
+ */
+export function isCurrentEntry(
+  entryKey: string,
+  index: number,
+  currentKey: string | null,
+  markFirstAsCurrent: boolean,
+): boolean {
+  return entryKey === currentKey || (markFirstAsCurrent && index === 0);
+}

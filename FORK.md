@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (31 commits ahead of upstream)
+**Version:** `0.11.2-fork` (37 commits ahead of upstream)
 
 ---
 
@@ -60,6 +60,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Mode display** — Active source (Page/Video/Video + Slides) shown on Summarize button
 - **Video detail toggle** — Segmented Summary/Detailed control in sidepanel (visible in video mode) switches between brief overview and full content extraction for YouTube videos
 - **Two-row header** — Title/subtitle on row 1, controls (summarize button, toggles, history/settings icons) on row 2 for better use of narrow sidepanel width
+- **No auto-summarize on options change** — Toggling mode (page/video) or slides doesn't auto-trigger summarization; user must explicitly click Summarize
+- **History current indicator** — Active summary/chat highlighted with "Current" badge in history panel
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
 - **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId` is preserved across tab switches
 
@@ -76,6 +78,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 - **Metadata column** — SQLite `metadata TEXT` column added via `ALTER TABLE` migration. Stores model, length, language, URL, prompt, system prompt, content stats, video duration, and max tokens as JSON
 - **Cache on refresh** — "Clear and refresh" (bypass mode) now skips cache reads but still persists the fresh summary. Achieved by splitting into `cacheStoreForRead` (null in bypass) and `cacheStoreForWrite` (always available)
+- **Title/siteName in cache metadata** — Both URL and asset flows store `title`, `siteName`, and `url` in cache metadata so history entries display page titles instead of raw URLs
 - **10 e2e cache tests** — TTL, eviction, metadata, special chars, all cache kinds
 
 **Key files:**
@@ -133,7 +136,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-31 commits ahead of upstream, oldest to newest:
+37 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -167,7 +170,13 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 28 | `b396369` | fix: use prefix matching for history URL filter | History Fix |
 | 29 | `ec255cb` | docs: update FORK.md with history URL filtering changes | Docs |
 | 30 | `0965600` | fix: add WSL systemd session check to setup script | Infra |
-| 31 | `af896bb` | feat: add video detail level toggle for YouTube summary vs detailed mode | Prompts/Extension |
+| 31 | `4bdbed4` | feat: add video detail level toggle for YouTube summary vs detailed mode | Prompts/Extension |
+| 32 | `fe1e492` | feat: split sidepanel header into two rows | Extension UX |
+| 33 | `f7332d6` | fix: store title and siteName in cache metadata for history display | Cache Fix |
+| 34 | `2de9406` | fix: store url and title in asset flow cache metadata | Cache Fix |
+| 35 | `576ee2b` | feat: highlight current summary/chat in history panel | History |
+| 36 | `PENDING` | fix: remove auto-summarize on options change in sidepanel | Extension Fix |
+| 37 | `PENDING` | docs: update FORK.md with recent commits | Docs |
 
 ---
 
@@ -198,6 +207,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/cache.list-entries.test.ts` — Cache listEntries and getEntryWithMeta
 - `tests/daemon.history-api.test.ts` — History API endpoint cache operations
 - `tests/video-detail-level.test.ts` — VideoDetailLevel prompt switching (32 tests)
+- `tests/sidepanel.history-utils.test.ts` — History current-indicator resolution logic (18 tests)
 
 ## Architecture Decisions
 
