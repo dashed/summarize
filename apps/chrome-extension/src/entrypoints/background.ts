@@ -874,7 +874,9 @@ export default defineBackground(() => {
     const cookies = wantsSlides ? await exportYouTubeCookies() : null;
     const urlStatusLabel = wantsSlides
       ? "Extracting video + thumbnails…"
-      : "Extracting video transcript…";
+      : preferUrl
+        ? "Extracting video transcript…"
+        : "Extracting page content…";
     sendStatus(session, urlStatusLabel);
     const extractTimeoutMs = wantsSlides ? 6 * 60_000 : 3 * 60_000;
     const extractController = new AbortController();
