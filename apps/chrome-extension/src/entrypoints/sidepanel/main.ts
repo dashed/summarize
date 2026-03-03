@@ -69,6 +69,7 @@ type PanelToBg =
   | { type: "panel:rememberUrl"; url: string }
   | { type: "panel:setAuto"; value: boolean }
   | { type: "panel:setLength"; value: string }
+  | { type: "panel:setVideoDetailLevel"; value: "summary" | "detailed" }
   | { type: "panel:slides-context"; requestId: string; url?: string }
   | { type: "panel:cache"; cache: PanelCachePayload }
   | { type: "panel:get-cache"; requestId: string; tabId: number; url: string }
@@ -265,6 +266,7 @@ let automationEnabledValue = defaultSettings.automationEnabled;
 let slidesEnabledValue = defaultSettings.slidesEnabled;
 let slidesParallelValue = defaultSettings.slidesParallel;
 let slidesOcrEnabledValue = defaultSettings.slidesOcrEnabled;
+let videoDetailLevelValue: "summary" | "detailed" = defaultSettings.videoDetailLevel;
 let autoKickTimer = 0;
 
 const MAX_CHAT_MESSAGES = 1000;
@@ -637,6 +639,13 @@ renderEl.addEventListener("click", (event) => {
   void send({ type: "panel:seek", seconds });
 });
 
+function handleVideoDetailLevelChange(value: "summary" | "detailed") {
+  if (value === videoDetailLevelValue) return;
+  videoDetailLevelValue = value;
+  void send({ type: "panel:setVideoDetailLevel", value });
+  refreshSummarizeControl();
+}
+
 async function handleSummarizeControlChange(value: { mode: "page" | "video"; slides: boolean }) {
   const prevSlides = slidesEnabledValue;
   const prevMode = inputMode;
@@ -724,6 +733,8 @@ const summarizeControl = mountSummarizeControl(summarizeControlRoot, {
   slidesTextMode,
   slidesTextToggleVisible,
   onSlidesTextModeChange: handleSlidesTextModeChange,
+  videoDetailLevel: videoDetailLevelValue,
+  onVideoDetailLevelChange: handleVideoDetailLevelChange,
   onChange: handleSummarizeControlChange,
   onSummarize: () => sendSummarize(),
 });
@@ -740,6 +751,8 @@ function refreshSummarizeControl() {
     slidesTextMode,
     slidesTextToggleVisible,
     onSlidesTextModeChange: handleSlidesTextModeChange,
+    videoDetailLevel: videoDetailLevelValue,
+    onVideoDetailLevelChange: handleVideoDetailLevelChange,
     onChange: handleSummarizeControlChange,
     onSummarize: () => sendSummarize(),
   });
@@ -3671,6 +3684,7 @@ function updateControls(state: UiState) {
   automationEnabledValue = state.settings.automationEnabled;
   slidesEnabledValue = state.settings.slidesEnabled;
   slidesParallelValue = state.settings.slidesParallel;
+  videoDetailLevelValue = state.settings.videoDetailLevel ?? "detailed";
   const nextSlidesOcrEnabled = Boolean(state.settings.slidesOcrEnabled);
   if (nextSlidesOcrEnabled !== slidesOcrEnabledValue) {
     slidesOcrEnabledValue = nextSlidesOcrEnabled;

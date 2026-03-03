@@ -711,6 +711,7 @@ export async function runUrlFlow({
       lengthInstruction: flags.lengthInstruction ?? null,
       languageInstruction: flags.languageInstruction ?? null,
       slides: slidesForPrompt ?? slidesExtracted ?? null,
+      videoDetailLevel: flags.videoDetailLevel ?? null,
     });
 
     // Whisper transcription costs need to be folded into the finish line totals.

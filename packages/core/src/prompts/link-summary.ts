@@ -52,6 +52,8 @@ export function estimateMaxCompletionTokensForCharacters(maxCharacters: number):
 
 const formatCount = (value: number): string => value.toLocaleString();
 
+export type VideoDetailLevel = "summary" | "detailed";
+
 export type ShareContextEntry = {
   author: string;
   handle?: string | null;
@@ -80,6 +82,7 @@ export function buildLinkSummaryPrompt({
   promptOverride,
   lengthInstruction,
   languageInstruction,
+  videoDetailLevel,
 }: {
   url: string;
   title: string | null;
@@ -98,6 +101,7 @@ export function buildLinkSummaryPrompt({
   promptOverride?: string | null;
   lengthInstruction?: string | null;
   languageInstruction?: string | null;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): string {
   const slidesText = slides?.text?.trim() ?? "";
   const chaptersBlock = formatChaptersBlock(chapters);
@@ -126,10 +130,15 @@ export function buildLinkSummaryPrompt({
 
   const contextHeader = contextLines.join("\n");
 
-  const audienceLine =
-    hasTranscript || isYouTube
-      ? "You convert video content into detailed, readable text with timestamp navigation. Your goal is to let the reader fully consume the video's content in written form without needing to watch it."
-      : "You summarize online articles for curious readers who want the gist before deciding to dive in.";
+  const effectiveVideoDetailLevel = videoDetailLevel ?? "detailed";
+  const isVideoContent = hasTranscript || isYouTube;
+  const useVideoSummaryMode = isVideoContent && effectiveVideoDetailLevel === "summary";
+
+  const audienceLine = isVideoContent
+    ? useVideoSummaryMode
+      ? "You summarize online videos for readers who want to know what the video covers before deciding to watch it."
+      : "You convert video content into detailed, readable text with timestamp navigation. Your goal is to let the reader fully consume the video's content in written form without needing to watch it."
+    : "You summarize online articles for curious readers who want the gist before deciding to dive in.";
 
   const effectiveSummaryLength: SummaryLengthTarget =
     typeof summaryLength === "string"
@@ -165,7 +174,7 @@ export function buildLinkSummaryPrompt({
       : `Target length: up to ${formatCount(effectiveSummaryLength.maxCharacters)} characters total (including Markdown and whitespace). Hard limit: do not exceed it.`;
   const contentLengthLine =
     contentCharacters > 0
-      ? hasTranscript || isYouTube
+      ? isVideoContent && !useVideoSummaryMode
         ? `Extracted transcript/content length: ${formatCount(contentCharacters)} characters. The transcript is only the spoken words; your writeup should also describe visual elements, organize information with headings, and include timestamps — so it can be longer than the raw transcript. Do not pad with filler, but do use the full allowed summary length for thorough coverage.`
         : `Extracted content length: ${formatCount(contentCharacters)} characters. Hard limit: never exceed this length. If the requested length is larger, do not pad—finish early rather than adding filler.`
       : "";
@@ -197,9 +206,11 @@ export function buildLinkSummaryPrompt({
   if (includeTimestamps && isYouTube && !hasTranscriptTimestamps) {
     console.error("[summarize:video] prompt: including YouTube timestamp instruction");
   }
+  const simpleTimestampInstruction =
+    'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.';
   const timestampInstruction = !includeTimestamps
     ? ""
-    : isYouTube
+    : isYouTube && !useVideoSummaryMode
       ? [
           "Weave [mm:ss] (or [hh:mm:ss]) timestamps throughout the summary wherever you reference a specific moment, topic change, or visual from the video.",
           'Place them naturally inline, for example: "At [2:15], the speaker introduces..." or "The demo ([5:30]) shows...".',
@@ -210,7 +221,7 @@ export function buildLinkSummaryPrompt({
           "Cover the ENTIRE video from start to finish. Distribute your coverage evenly across all segments — do not front-load the summary or skip later sections. Every major topic transition should get its own timestamp. Aim for at least one timestamp per 1-2 minutes of video.",
           "When the video has minimal narration or sparse dialogue, expand your visual descriptions and contextual analysis to meet the full length target. Do not stop generating early — use the entire allowed length for thorough, detailed coverage of the video's content.",
         ].join(" ")
-      : 'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp from the transcript. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.';
+      : simpleTimestampInstruction;
   const slideMarkers =
     slides && slides.count > 0
       ? Array.from({ length: slides.count }, (_, index) => `[slide:${index + 1}]`).join(" ")

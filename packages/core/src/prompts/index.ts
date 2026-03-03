@@ -8,6 +8,7 @@ export {
   type ShareContextEntry,
   SUMMARY_LENGTH_TO_TOKENS,
   type SummaryLengthTarget,
+  type VideoDetailLevel,
 } from "./link-summary.js";
 export {
   formatPresetLengthGuidance,

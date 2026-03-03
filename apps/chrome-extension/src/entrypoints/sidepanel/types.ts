@@ -20,6 +20,7 @@ export type UiState = {
     lineHeight: number;
     model: string;
     length: string;
+    videoDetailLevel: "summary" | "detailed";
     tokenPresent: boolean;
   };
   status: string;

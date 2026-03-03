@@ -24,6 +24,7 @@ import {
   buildLinkSummaryPrompt,
   SUMMARY_LENGTH_TARGET_CHARACTERS,
   SUMMARY_SYSTEM_PROMPT,
+  type VideoDetailLevel,
 } from "../../../prompts/index.js";
 import {
   readLastSuccessfulCliProvider,
@@ -345,6 +346,7 @@ export function buildUrlPrompt({
   lengthInstruction,
   languageInstruction,
   slides,
+  videoDetailLevel,
 }: {
   extracted: ExtractedLinkContent;
   outputLanguage: UrlFlowContext["flags"]["outputLanguage"];
@@ -353,6 +355,7 @@ export function buildUrlPrompt({
   lengthInstruction?: string | null;
   languageInstruction?: string | null;
   slides?: SlidesResult | null;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): string {
   const isYouTube = extracted.siteName === "YouTube" || isYouTubeUrl(extracted.url);
   const preset = lengthArg.kind === "preset" ? lengthArg.preset : "medium";
@@ -382,6 +385,7 @@ export function buildUrlPrompt({
     promptOverride: promptOverride ?? null,
     lengthInstruction: lengthInstruction ?? null,
     languageInstruction: languageInstruction ?? null,
+    videoDetailLevel: videoDetailLevel ?? null,
   });
 }
 

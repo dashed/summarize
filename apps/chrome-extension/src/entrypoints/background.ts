@@ -39,6 +39,7 @@ type PanelToBg =
   | { type: "panel:rememberUrl"; url: string }
   | { type: "panel:setAuto"; value: boolean }
   | { type: "panel:setLength"; value: string }
+  | { type: "panel:setVideoDetailLevel"; value: "summary" | "detailed" }
   | { type: "panel:slides-context"; requestId: string; url?: string }
   | { type: "panel:cache"; cache: PanelCachePayload }
   | { type: "panel:get-cache"; requestId: string; tabId: number; url: string }
@@ -1052,6 +1053,7 @@ export default defineBackground(() => {
         lineHeight: settings.lineHeight,
         model: settings.model,
         length: settings.length,
+        videoDetailLevel: settings.videoDetailLevel,
         tokenPresent: Boolean(settings.token.trim()),
       },
       status,
@@ -1191,6 +1193,7 @@ export default defineBackground(() => {
             mode: "url",
             extractOnly: true,
             timestamps: true,
+            videoDetailLevel: settings.videoDetailLevel,
             ...(opts?.refresh ? { noCache: true } : {}),
             maxCharacters: null,
             diagnostics: settings.extendedLogging ? { includeContent: true } : null,
@@ -2062,6 +2065,12 @@ export default defineBackground(() => {
           await patchSettings({ length: next });
           void emitState(session, "");
           void summarizeActiveTab(session, "length-change");
+        })();
+        break;
+      case "panel:setVideoDetailLevel":
+        void (async () => {
+          const next = (raw as { value: "summary" | "detailed" }).value;
+          await patchSettings({ videoDetailLevel: next });
         })();
         break;
       case "panel:slides-context":

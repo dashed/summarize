@@ -10,6 +10,7 @@ import type { StreamMode } from "../../../flags.js";
 import type { OutputLanguage } from "../../../language.js";
 import type { ExecFileFn } from "../../../markitdown.js";
 import type { FixedModelSpec, RequestedModel } from "../../../model-spec.js";
+import type { VideoDetailLevel } from "../../../prompts/index.js";
 import type { SummaryLength } from "../../../shared/contracts.js";
 import type {
   SlideExtractionResult,
@@ -65,6 +66,7 @@ export type UrlFlowFlags = {
   slides: SlideSettings | null;
   slidesDebug: boolean;
   slidesOutput?: boolean;
+  videoDetailLevel?: VideoDetailLevel | null;
 };
 
 export type UrlFlowModel = {

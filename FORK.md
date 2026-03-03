@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (29 commits ahead of upstream)
+**Version:** `0.11.2-fork` (31 commits ahead of upstream)
 
 ---
 
@@ -58,6 +58,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Elapsed timer** — Live timer updates every 100ms during summarization
 - **Daemon status footer** — Shows daemon version + commit hash (e.g. `v0.11.2-fork . 35be332`) with green/red connection indicator
 - **Mode display** — Active source (Page/Video/Video + Slides) shown on Summarize button
+- **Video detail toggle** — Segmented Summary/Detailed control in sidepanel (visible in video mode) switches between brief overview and full content extraction for YouTube videos
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
 - **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId` is preserved across tab switches
 
@@ -89,10 +90,11 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Content extraction reframe** — System prompt changed from "summarization engine" to "content extraction engine" for video content. YouTube audience reframed from "curious Twitter users" to "readers who want full video content in text form"
 - **Comprehensive video coverage** — New instructions: cover entire video evenly, expand visual descriptions for sparse-transcript videos, at least one timestamp per 1-2 minutes, narrate visual content for gameplay/screen recordings
 - **Curated token budgets** — Replaces `chars/4` heuristic with `SUMMARY_LENGTH_TO_TOKENS` map. XXL fixed from 5,500 to 12,288 tokens. Content-length hard cap relaxed for video/transcript content
+- **Video detail level toggle** — `VideoDetailLevel` type (`"summary" | "detailed"`) controls YouTube/video prompt behavior. "Detailed" (default) produces comprehensive content extraction with inline `[mm:ss]` timestamps, full video coverage, and visual descriptions. "Summary" produces a brief overview for readers deciding whether to watch, with simplified "Key moments" (3-6 bullets) and article-style length limits. Eliminates the short-length vs detailed-extraction prompt contradiction
 
 **Key files:**
 - `packages/core/src/prompts/summary-system.ts` — System prompt reframe
-- `packages/core/src/prompts/link-summary.ts` — Video prompt instructions, timestamp coverage
+- `packages/core/src/prompts/link-summary.ts` — Video prompt instructions, timestamp coverage, `VideoDetailLevel` toggle
 - `packages/core/src/prompts/summary-lengths.ts` — Token budget map
 
 ---
@@ -130,7 +132,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-29 commits ahead of upstream, oldest to newest:
+31 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -162,6 +164,9 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 26 | `b5ced77` | feat: add summary history and chat session persistence | History |
 | 27 | `baf794a` | fix: filter history entries by current tab URL | History Fix |
 | 28 | `b396369` | fix: use prefix matching for history URL filter | History Fix |
+| 29 | `ec255cb` | docs: update FORK.md with history URL filtering changes | Docs |
+| 30 | `0965600` | fix: add WSL systemd session check to setup script | Infra |
+| 31 | `af896bb` | feat: add video detail level toggle for YouTube summary vs detailed mode | Prompts/Extension |
 
 ---
 
@@ -191,6 +196,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/sidepanel.panel-cache.test.ts` — Panel cache controller and tab-switch restore logic
 - `tests/cache.list-entries.test.ts` — Cache listEntries and getEntryWithMeta
 - `tests/daemon.history-api.test.ts` — History API endpoint cache operations
+- `tests/video-detail-level.test.ts` — VideoDetailLevel prompt switching (32 tests)
 
 ## Architecture Decisions
 
@@ -204,3 +210,4 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 8. **Tab-switch SSE reconnect** — Save panel cache before aborting streams, then reconnect to daemon's SSE replay buffer on tab switch back for seamless restore
 9. **Summary/chat history via existing cache** — Reuses the `cache_entries` SQLite table with `listEntries()` queries rather than adding new tables. Chat sessions keyed by URL+automationEnabled hash using the reserved `"chat"` CacheKind
 10. **URL prefix matching for history** — Uses `LIKE ? || '%'` on `json_extract(metadata, '$.url')` instead of exact match. Extension canonicalizes YouTube URLs (strips `t=`, `si=` params) so the prefix `?v=abc123` matches stored URLs like `?v=abc123&t=637s`
+11. **Video detail level toggle** — Separates "summary" vs "detailed" video modes in the prompt rather than relying on length presets alone. Short length + detailed extraction creates contradictory instructions (900-char limit vs "cover ENTIRE video with timestamps every 1-2 min"); the toggle cleanly separates these concerns

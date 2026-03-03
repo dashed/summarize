@@ -29,6 +29,7 @@ import {
   buildProcessLogsResult,
   ProcessRegistry,
 } from "./process-registry.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import {
   extractContentForUrl,
   streamSummaryForUrl,
@@ -729,6 +730,14 @@ export async function runDaemonServer({
         const formatRaw = typeof obj.format === "string" ? obj.format.trim().toLowerCase() : "";
         const format: "text" | "markdown" =
           formatRaw === "markdown" || formatRaw === "md" ? "markdown" : "text";
+        const videoDetailLevelRaw =
+          typeof obj.videoDetailLevel === "string" ? obj.videoDetailLevel.trim().toLowerCase() : "";
+        const videoDetailLevel: VideoDetailLevel | null =
+          videoDetailLevelRaw === "summary"
+            ? "summary"
+            : videoDetailLevelRaw === "detailed"
+              ? "detailed"
+              : null;
         const overrides = resolveRunOverrides({
           firecrawl: obj.firecrawl,
           markdownMode: obj.markdownMode,
@@ -1004,6 +1013,7 @@ export async function runDaemonServer({
                     overrides,
                     slides: slidesSettings,
                     ytDlpCookiesFile: cookiesFilePath,
+                    videoDetailLevel,
                     hooks: {
                       ...(includeContentLog
                         ? {
@@ -1140,6 +1150,7 @@ export async function runDaemonServer({
                     cache: requestCache,
                     mediaCache,
                     overrides,
+                    videoDetailLevel,
                   });
             };
 

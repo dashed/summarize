@@ -98,6 +98,7 @@ export function buildSummarizeRequestBody({
       ...withTimestamps,
       mode: "url",
       videoMode: "transcript",
+      videoDetailLevel: settings.videoDetailLevel,
       ...slidesSettings,
     };
   } else if (inputMode === "page") {

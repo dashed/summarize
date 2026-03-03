@@ -13,6 +13,7 @@ import { deriveExtractionUi } from "../run/flows/url/extract.js";
 import { runUrlFlow } from "../run/flows/url/flow.js";
 import { buildUrlPrompt, summarizeExtractedUrl } from "../run/flows/url/summary.js";
 import { createDaemonUrlFlowContext } from "./flow-context.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import { countWords, estimateDurationSecondsFromWords, formatInputSummary } from "./meta.js";
 import { formatProgress } from "./summarize-progress.js";
 
@@ -151,6 +152,7 @@ export async function streamSummaryForVisiblePage({
   cache,
   mediaCache,
   overrides,
+  videoDetailLevel,
 }: {
   env: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
@@ -164,6 +166,7 @@ export async function streamSummaryForVisiblePage({
   cache: CacheState;
   mediaCache: MediaCache | null;
   overrides: RunOverrides;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): Promise<{ usedModel: string; metrics: VisiblePageMetrics }> {
   const startedAt = Date.now();
   let usedModel: string | null = null;
@@ -183,6 +186,7 @@ export async function streamSummaryForVisiblePage({
     maxExtractCharacters: null,
     format,
     overrides,
+    videoDetailLevel,
     hooks: {
       onModelChosen: (modelId) => {
         usedModel = modelId;
@@ -258,6 +262,7 @@ export async function streamSummaryForVisiblePage({
     promptOverride: ctx.flags.promptOverride ?? null,
     lengthInstruction: ctx.flags.lengthInstruction ?? null,
     languageInstruction: ctx.flags.languageInstruction ?? null,
+    videoDetailLevel: ctx.flags.videoDetailLevel ?? null,
   });
 
   await summarizeExtractedUrl({
@@ -308,6 +313,7 @@ export async function streamSummaryForUrl({
   slides,
   ytDlpCookiesFile,
   hooks,
+  videoDetailLevel,
 }: {
   env: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
@@ -323,6 +329,7 @@ export async function streamSummaryForUrl({
   overrides: RunOverrides;
   slides?: SlideSettings | null;
   ytDlpCookiesFile?: string | null;
+  videoDetailLevel?: VideoDetailLevel | null;
   hooks?: {
     onExtracted?: ((extracted: ExtractedLinkContent) => void) | null;
     onSlidesExtracted?: ((slides: SlideExtractionResult) => void) | null;
@@ -362,6 +369,7 @@ export async function streamSummaryForUrl({
     overrides,
     slides,
     ytDlpCookiesFile,
+    videoDetailLevel,
     hooks: {
       onModelChosen: (modelId) => {
         usedModel = modelId;
