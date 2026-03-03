@@ -17,6 +17,10 @@ export type HeaderController = {
   updateHeaderOffset: () => void;
   /** Reset the tracked progress to 0 (e.g. on new summarization). */
   resetProgress: () => void;
+  /** Get current tracked progress (0–100). */
+  getProgress: () => number;
+  /** Seed tracked progress to a specific value (e.g. on tab-restore). */
+  setProgress: (value: number) => void;
 };
 
 export function createHeaderController({
@@ -216,6 +220,12 @@ export function createHeaderController({
     trackedProgress = 0;
   };
 
+  const getProgress = () => trackedProgress;
+
+  const setProgress = (value: number) => {
+    trackedProgress = Math.max(0, Math.min(100, value));
+  };
+
   return {
     setBaseTitle,
     setBaseSubtitle,
@@ -225,5 +235,7 @@ export function createHeaderController({
     setProgressOverride,
     updateHeaderOffset,
     resetProgress,
+    getProgress,
+    setProgress,
   };
 }

@@ -17,6 +17,10 @@ export type PanelCachePayload = {
   lastMeta: PanelCacheMeta;
   slides: SseSlidesData | null;
   transcriptTimedText: string | null;
+  /** Elapsed timer value (ms) at the time the cache was saved. */
+  elapsedMs?: number | null;
+  /** Progress bar position (0–100) at the time the cache was saved. */
+  trackedProgress?: number | null;
 };
 
 export type PanelCacheResponse = {

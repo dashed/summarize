@@ -296,6 +296,8 @@ let inputMode: "page" | "video" = "page";
 let inputModeOverride: "page" | "video" | null = null;
 let mediaAvailable = false;
 let preserveChatOnNextReset = false;
+let resumeElapsedMs: number | null = null;
+let resumeTrackedProgress: number | null = null;
 let summarizeVideoLabel = "Video";
 let historyMode: "summaries" | "chats" = "summaries";
 let historyOpen = false;
@@ -1157,6 +1159,8 @@ function buildPanelCachePayload(): PanelCachePayload | null {
     lastMeta: panelState.lastMeta,
     slides: panelState.slides ?? null,
     transcriptTimedText: slidesTranscriptTimedText ?? null,
+    elapsedMs: elapsedTimerId != null ? performance.now() - elapsedStart : null,
+    trackedProgress: headerController.getProgress() || null,
   };
 }
 
@@ -1211,7 +1215,11 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
   if (action.kind === "render") {
     renderMarkdown(action.markdown);
   } else if (action.kind === "reconnect") {
-    // Tab had an in-progress summarization — reconnect to daemon SSE replay
+    // Tab had an in-progress summarization — reconnect to daemon SSE replay.
+    // Pre-seed resume values so the stream's onReset continues the timer
+    // and progress bar from where they were instead of resetting to 0.
+    resumeElapsedMs = payload.elapsedMs ?? null;
+    resumeTrackedProgress = payload.trackedProgress ?? null;
     void streamController.start({
       id: action.runId,
       url: action.url,
@@ -3159,10 +3167,11 @@ const slidesSummaryController = createStreamController({
 let elapsedTimerId: ReturnType<typeof setInterval> | null = null;
 let elapsedStart = 0;
 
-function startElapsedTimer() {
+function startElapsedTimer(offsetMs = 0) {
   stopElapsedTimer();
-  elapsedStart = performance.now();
-  elapsedEl.textContent = "0.0s";
+  elapsedStart = performance.now() - offsetMs;
+  const sec = offsetMs / 1000;
+  elapsedEl.textContent = `${sec.toFixed(1)}s`;
   elapsedTimerId = setInterval(() => {
     const sec = (performance.now() - elapsedStart) / 1000;
     elapsedEl.textContent = `${sec.toFixed(1)}s`;
@@ -3199,8 +3208,18 @@ const streamController = createStreamController({
       };
     }
     lastStreamError = null;
-    headerController.resetProgress();
-    startElapsedTimer();
+    if (resumeTrackedProgress != null && resumeTrackedProgress > 0) {
+      headerController.setProgress(resumeTrackedProgress);
+      resumeTrackedProgress = null;
+    } else {
+      headerController.resetProgress();
+    }
+    if (resumeElapsedMs != null && resumeElapsedMs > 0) {
+      startElapsedTimer(resumeElapsedMs);
+      resumeElapsedMs = null;
+    } else {
+      startElapsedTimer();
+    }
     if (pendingRunForPlannedSlides) {
       seedPlannedSlidesForRun(pendingRunForPlannedSlides);
       pendingRunForPlannedSlides = null;

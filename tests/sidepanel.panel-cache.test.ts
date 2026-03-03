@@ -177,6 +177,59 @@ describe("panel cache controller", () => {
     expect(restored!.summaryMarkdown).toBeNull();
   });
 
+  it("preserves elapsedMs and trackedProgress for in-progress runs", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    const payload = samplePayload({
+      tabId: 10,
+      runId: "run-progress",
+      summaryMarkdown: null,
+      elapsedMs: 12345,
+      trackedProgress: 42,
+    });
+    const controller = createPanelCacheController({
+      getSnapshot: () => payload,
+      sendCache,
+      sendRequest,
+    });
+
+    controller.syncNow();
+
+    const cached = controller.resolve(10, "https://example.com");
+    expect(cached).not.toBeNull();
+    expect(cached!.elapsedMs).toBe(12345);
+    expect(cached!.trackedProgress).toBe(42);
+  });
+
+  it("round-trips elapsed/progress through tab switch simulation", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    let currentState: PanelCachePayload | null = samplePayload({
+      tabId: 10,
+      url: "https://tab-a.example.com",
+      runId: "run-tab-a",
+      summaryMarkdown: null,
+      elapsedMs: 5000,
+      trackedProgress: 35,
+    });
+    const controller = createPanelCacheController({
+      getSnapshot: () => currentState,
+      sendCache,
+      sendRequest,
+    });
+
+    // Tab switch away — sync captures state
+    controller.syncNow();
+    currentState = null;
+
+    // Tab switch back — restore
+    const restored = controller.resolve(10, "https://tab-a.example.com");
+    expect(restored).not.toBeNull();
+    expect(restored!.runId).toBe("run-tab-a");
+    expect(restored!.elapsedMs).toBe(5000);
+    expect(restored!.trackedProgress).toBe(35);
+  });
+
   it("syncNow preserves partial markdown from streaming", () => {
     const sendCache = vi.fn();
     const sendRequest = vi.fn();
