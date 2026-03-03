@@ -59,6 +59,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Daemon status footer** — Shows daemon version + commit hash (e.g. `v0.11.2-fork . 35be332`) with green/red connection indicator
 - **Mode display** — Active source (Page/Video/Video + Slides) shown on Summarize button
 - **Video detail toggle** — Segmented Summary/Detailed control in sidepanel (visible in video mode) switches between brief overview and full content extraction for YouTube videos
+- **Two-row header** — Title/subtitle on row 1, controls (summarize button, toggles, history/settings icons) on row 2 for better use of narrow sidepanel width
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
 - **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId` is preserved across tab switches
 
