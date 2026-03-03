@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (36 commits ahead of upstream)
+**Version:** `0.11.2-fork` (38 commits ahead of upstream)
 
 ---
 
@@ -63,7 +63,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **No auto-summarize on options change** — Toggling mode (page/video) or slides doesn't auto-trigger summarization; user must explicitly click Summarize
 - **History current indicator** — Active summary/chat highlighted with "Current" badge in history panel
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
-- **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId` is preserved across tab switches
+- **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId`, elapsed timer, and progress bar position are preserved across tab switches
 
 **Key files:**
 - `apps/chrome-extension/src/entrypoints/sidepanel/progress-stages.ts` — Pipeline stage resolution
@@ -136,7 +136,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-36 commits ahead of upstream, oldest to newest:
+38 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -176,6 +176,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 34 | `2de9406` | fix: store url and title in asset flow cache metadata | Cache Fix |
 | 35 | `576ee2b` | feat: highlight current summary/chat in history panel | History |
 | 36 | `c70db3e` | fix: remove auto-summarize on options change, extract history utils | Extension Fix |
+| 37 | `f6058f8` | fix: preserve timer and progress bar across tab switches | Extension Fix |
+| 38 | `39144e4` | docs: update FORK.md with tab-switch timer/progress fix | Docs |
 
 ---
 
@@ -207,6 +209,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/daemon.history-api.test.ts` — History API endpoint cache operations
 - `tests/video-detail-level.test.ts` — VideoDetailLevel prompt switching (32 tests)
 - `tests/sidepanel.history-utils.test.ts` — History current-indicator resolution logic (18 tests)
+- `tests/sidepanel.header-controller.test.ts` — Header controller progress get/set/reset (5 tests)
 
 ## Architecture Decisions
 
