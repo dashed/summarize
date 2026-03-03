@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (37 commits ahead of upstream)
+**Version:** `0.11.2-fork` (36 commits ahead of upstream)
 
 ---
 
@@ -136,7 +136,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 
 ## Commits
 
-37 commits ahead of upstream, oldest to newest:
+36 commits ahead of upstream, oldest to newest:
 
 | # | Hash | Subject | Area |
 |---|------|---------|------|
@@ -175,8 +175,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 | 33 | `f7332d6` | fix: store title and siteName in cache metadata for history display | Cache Fix |
 | 34 | `2de9406` | fix: store url and title in asset flow cache metadata | Cache Fix |
 | 35 | `576ee2b` | feat: highlight current summary/chat in history panel | History |
-| 36 | `PENDING` | fix: remove auto-summarize on options change in sidepanel | Extension Fix |
-| 37 | `PENDING` | docs: update FORK.md with recent commits | Docs |
+| 36 | `c70db3e` | fix: remove auto-summarize on options change, extract history utils | Extension Fix |
 
 ---
 
