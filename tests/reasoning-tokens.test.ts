@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { isYouTubeUrl } from "../src/daemon/agent.js";
 import {
   isGeminiThinkingModel,
   resolveEffectiveReasoning,
   VIDEO_MIN_TIMEOUT_MS,
 } from "../src/llm/generate-text.js";
-import { isYouTubeUrl } from "../src/daemon/agent.js";
 
 describe("isGeminiThinkingModel", () => {
   it("matches gemini-3-flash-preview", () => {

@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PromptPart } from "../src/llm/prompt.js";
-import {
-  hasVideoUrlParts,
-  stripVideoUrlParts,
-  userInterleavedMessage,
-} from "../src/llm/prompt.js";
 import type { Prompt } from "../src/llm/prompt.js";
+import { hasVideoUrlParts, stripVideoUrlParts, userInterleavedMessage } from "../src/llm/prompt.js";
 
 describe("PromptPart video_url support", () => {
   describe("hasVideoUrlParts", () => {
@@ -100,9 +96,7 @@ describe("PromptPart video_url support", () => {
     });
 
     it("produces empty content when only video_url parts exist", () => {
-      const parts: PromptPart[] = [
-        { kind: "video_url", url: "https://youtube.com/watch?v=abc" },
-      ];
+      const parts: PromptPart[] = [{ kind: "video_url", url: "https://youtube.com/watch?v=abc" }];
       const message = userInterleavedMessage({ parts });
       const content = message.content as Array<unknown>;
       expect(content).toHaveLength(0);

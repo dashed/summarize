@@ -15,7 +15,12 @@ describe("userInterleavedMessage", () => {
 
     expect(message.role).toBe("user");
     expect(Array.isArray(message.content)).toBe(true);
-    const content = message.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    const content = message.content as Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+    }>;
     expect(content.length).toBe(4);
 
     expect(content[0]!.type).toBe("text");
@@ -33,9 +38,7 @@ describe("userInterleavedMessage", () => {
   });
 
   it("handles text-only parts", () => {
-    const parts: PromptPart[] = [
-      { kind: "text", text: "Just text." },
-    ];
+    const parts: PromptPart[] = [{ kind: "text", text: "Just text." }];
 
     const message = userInterleavedMessage({ parts });
     const content = message.content as Array<{ type: string; text?: string }>;

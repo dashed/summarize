@@ -14,10 +14,7 @@ import { hasVideoUrlParts, stripVideoUrlParts } from "../src/llm/prompt.js";
  * and replicate the gating logic here.
  */
 
-function applyVideoGating(
-  prompt: Prompt,
-  envForRun: Record<string, string | undefined>,
-): Prompt {
+function applyVideoGating(prompt: Prompt, envForRun: Record<string, string | undefined>): Prompt {
   const hasVideo = hasVideoUrlParts(prompt);
   if (!hasVideo) return prompt;
   const envVideo = envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyGeminiDescriptions } from "../src/slides/extract.js";
 import type { SlideImage } from "../src/slides/types.js";
+import { applyGeminiDescriptions } from "../src/slides/extract.js";
 
 function makeSlide(index: number, timestamp: number): SlideImage {
   return { index, timestamp, imagePath: `/slides/slide_${index}.png` };

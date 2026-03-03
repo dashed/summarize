@@ -1,5 +1,6 @@
 import type { CacheState } from "../cache.js";
 import type { RunMetricsReport } from "../costs.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import type { RunOverrides } from "../run/run-settings.js";
 import type {
   SlideExtractionResult,
@@ -13,7 +14,6 @@ import { deriveExtractionUi } from "../run/flows/url/extract.js";
 import { runUrlFlow } from "../run/flows/url/flow.js";
 import { buildUrlPrompt, summarizeExtractedUrl } from "../run/flows/url/summary.js";
 import { createDaemonUrlFlowContext } from "./flow-context.js";
-import type { VideoDetailLevel } from "../prompts/index.js";
 import { countWords, estimateDurationSecondsFromWords, formatInputSummary } from "./meta.js";
 import { formatProgress } from "./summarize-progress.js";
 
@@ -415,9 +415,7 @@ export async function streamSummaryForUrl({
   // because the extension only resets its timer on parsed events.
   const isYoutube = isYouTubeUrl(input.url);
   if (isYoutube) {
-    console.error(
-      `[video-debug] streamSummaryForUrl START: url=${input.url}, isYouTube=true`,
-    );
+    console.error(`[video-debug] streamSummaryForUrl START: url=${input.url}, isYouTube=true`);
   }
   let videoKeepalive: ReturnType<typeof setInterval> | null = null;
   if (isYoutube && writeStatus) {

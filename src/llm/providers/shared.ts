@@ -48,9 +48,7 @@ export function tryGetModel(provider: KnownProvider, modelId: string): Model<Api
 export function modelSupportsImages(provider: string, modelId: string): boolean {
   // nvidia and zai use the OpenAI completions API under the hood
   const lookupProvider: KnownProvider =
-    provider === "nvidia" || provider === "zai"
-      ? "openai"
-      : (provider as KnownProvider);
+    provider === "nvidia" || provider === "zai" ? "openai" : (provider as KnownProvider);
   const model = tryGetModel(lookupProvider, modelId);
   if (!model) return true; // assume capable for unknown models
   return model.input.includes("image");

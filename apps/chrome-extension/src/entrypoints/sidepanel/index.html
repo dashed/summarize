@@ -13,6 +13,7 @@
           <div id="title" class="title">Summarize</div>
           <div class="subtitleRow">
             <div id="subtitle" class="subtitle"></div>
+            <span id="modelBadge" class="modelBadge"></span>
             <span id="elapsed" class="elapsed"></span>
           </div>
         </div>
@@ -20,12 +21,28 @@
       <div class="headerRow headerRow--controls">
         <div class="controls">
           <div id="summarizeControlRoot" class="summarizeControlRoot"></div>
+          <div id="lengthRoot"></div>
+          <button
+            id="refresh"
+            type="button"
+            class="ghost icon"
+            aria-label="Refresh"
+            title="Refresh (Shift+Enter)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M17.65 6.35A7.96 7.96 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+              />
+            </svg>
+            <span class="btnLabel">Refresh</span>
+          </button>
           <button id="historyToggle" type="button" class="ghost icon" aria-label="History">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
               />
             </svg>
+            <span class="btnLabel">History</span>
           </button>
           <button id="drawerToggle" type="button" class="ghost icon" aria-label="Settings">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -33,6 +50,7 @@
                 d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.18 7.18 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 1h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 7.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.51.4 1.05.71 1.63.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.58-.23 1.12-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"
               />
             </svg>
+            <span class="btnLabel">Settings</span>
           </button>
         </div>
       </div>
@@ -61,7 +79,6 @@
     <section id="drawer" class="drawer hidden" aria-label="Controls">
       <div class="drawerGrid">
         <div id="pickersRoot"></div>
-        <div id="lengthRoot"></div>
         <div class="size">
           <span>Size</span>
           <div class="sizeControl" role="group" aria-label="Text size">
@@ -148,9 +165,6 @@
           <div class="drawerAdvancedRow">
             <div id="autoToggle" class="toggleRow"></div>
             <div class="drawerActions drawerAdvancedActions">
-              <button id="refresh" type="button" class="ghost" title="Refresh (Shift+Enter)">
-                Refresh
-              </button>
               <button id="clear" type="button" class="ghost" title="Clear summary + chat">
                 Clear
               </button>
@@ -165,7 +179,9 @@
       <div class="historyHeader">
         <h3 class="historyTitle">History</h3>
         <div class="historyTabs">
-          <button id="historyTabSummaries" type="button" class="ghost small historyTab active">Summaries</button>
+          <button id="historyTabSummaries" type="button" class="ghost small historyTab active">
+            Summaries
+          </button>
           <button id="historyTabChats" type="button" class="ghost small historyTab">Chats</button>
         </div>
       </div>

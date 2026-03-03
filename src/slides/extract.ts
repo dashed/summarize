@@ -554,9 +554,18 @@ export async function extractSlidesForSource({
         const geminiResult = await geminiTimestampsPromise;
         const useGemini = geminiResult && geminiResult.timestamps.length > 0;
 
-        type TrimmedSlide = { index: number; timestamp: number; imagePath: string; segment?: { start: number; end: number | null } | null };
+        type TrimmedSlide = {
+          index: number;
+          timestamp: number;
+          imagePath: string;
+          segment?: { start: number; end: number | null } | null;
+        };
         let trimmed: TrimmedSlide[];
-        let detection: { timestamps: number[]; durationSeconds: number | null; autoTune: SlideAutoTune } | null = null;
+        let detection: {
+          timestamps: number[];
+          durationSeconds: number | null;
+          autoTune: SlideAutoTune;
+        } | null = null;
         let geminiChapters: VideoChapter[] | null = null;
 
         if (useGemini) {
@@ -667,7 +676,12 @@ export async function extractSlidesForSource({
           slidesDirId: buildSlidesDirId(slidesDir),
           sceneThreshold: settings.sceneThreshold,
           autoTuneThreshold: settings.autoTuneThreshold,
-          autoTune: detection?.autoTune ?? { enabled: false, chosenThreshold: settings.sceneThreshold, confidence: 0, strategy: "none" },
+          autoTune: detection?.autoTune ?? {
+            enabled: false,
+            chosenThreshold: settings.sceneThreshold,
+            confidence: 0,
+            strategy: "none",
+          },
           maxSlides: settings.maxSlides,
           minSlideDuration: settings.minDurationSeconds,
           ocrRequested: settings.ocr,
@@ -818,7 +832,12 @@ export async function extractSlidesForSource({
           slidesDirId: buildSlidesDirId(slidesDir),
           sceneThreshold: settings.sceneThreshold,
           autoTuneThreshold: settings.autoTuneThreshold,
-          autoTune: detection?.autoTune ?? { enabled: false, chosenThreshold: settings.sceneThreshold, confidence: 0, strategy: "none" },
+          autoTune: detection?.autoTune ?? {
+            enabled: false,
+            chosenThreshold: settings.sceneThreshold,
+            confidence: 0,
+            strategy: "none",
+          },
           maxSlides: settings.maxSlides,
           minSlideDuration: settings.minDurationSeconds,
           ocrRequested: settings.ocr,

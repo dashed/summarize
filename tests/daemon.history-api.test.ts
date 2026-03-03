@@ -279,10 +279,16 @@ describe("GET /v1/history/chats (cache layer)", () => {
     const store = await makeTempStore();
 
     store.setText("summary", "sum-1", "summary text", null);
-    store.setJson("chat", buildChatKey("https://example.com", false), [{ role: "user", content: "hi" }], null, {
-      url: "https://example.com",
-      messageCount: 1,
-    });
+    store.setJson(
+      "chat",
+      buildChatKey("https://example.com", false),
+      [{ role: "user", content: "hi" }],
+      null,
+      {
+        url: "https://example.com",
+        messageCount: 1,
+      },
+    );
 
     const chats = store.listEntries("chat");
     expect(chats).toHaveLength(1);

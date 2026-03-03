@@ -535,7 +535,17 @@ export async function createCacheStore({
     };
   };
 
-  return { getText, getJson, setText, setJson, listEntries, getEntryWithMeta, clear, close, transcriptCache };
+  return {
+    getText,
+    getJson,
+    setText,
+    setJson,
+    listEntries,
+    getEntryWithMeta,
+    clear,
+    close,
+    transcriptCache,
+  };
 }
 
 export function clearCacheFiles(path: string) {

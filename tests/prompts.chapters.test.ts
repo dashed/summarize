@@ -35,9 +35,7 @@ describe("buildLinkSummaryPrompt (chapters)", () => {
   it("formats timestamps with hours when >= 1 hour", () => {
     const prompt = buildLinkSummaryPrompt({
       ...baseArgs,
-      chapters: [
-        { startTime: 3661, endTime: 7200, title: "After one hour" },
-      ],
+      chapters: [{ startTime: 3661, endTime: 7200, title: "After one hour" }],
     });
 
     expect(prompt).toContain("- [01:01:01] After one hour");
@@ -46,9 +44,7 @@ describe("buildLinkSummaryPrompt (chapters)", () => {
   it("includes chapter instruction when chapters present and no slides", () => {
     const prompt = buildLinkSummaryPrompt({
       ...baseArgs,
-      chapters: [
-        { startTime: 0, endTime: 120, title: "Intro" },
-      ],
+      chapters: [{ startTime: 0, endTime: 120, title: "Intro" }],
     });
 
     expect(prompt).toContain("chapter titles as guidance for organizing the summary");
@@ -58,9 +54,7 @@ describe("buildLinkSummaryPrompt (chapters)", () => {
   it("omits chapter instruction when slides are present", () => {
     const prompt = buildLinkSummaryPrompt({
       ...baseArgs,
-      chapters: [
-        { startTime: 0, endTime: 120, title: "Intro" },
-      ],
+      chapters: [{ startTime: 0, endTime: 120, title: "Intro" }],
       slides: { count: 3, text: "[slide:1] [0:00–0:30]\nHello" },
     });
 

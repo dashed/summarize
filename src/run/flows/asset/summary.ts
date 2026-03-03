@@ -509,7 +509,10 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         lengthKey,
         languageKey,
       });
-      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
+      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>(
+        "summary",
+        key,
+      );
       const cachedSummary =
         cached && typeof cached.summary === "string" ? cached.summary.trim() : null;
       const cachedModelId = cached && typeof cached.model === "string" ? cached.model.trim() : null;
@@ -696,7 +699,13 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       maxTokens: ctx.desiredOutputTokens,
       preset,
     };
-    cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, ctx.cache.ttlMs, cacheMeta);
+    cacheStoreForWrite.setText(
+      "summary",
+      perModelKey,
+      summaryResult.summary,
+      ctx.cache.ttlMs,
+      cacheMeta,
+    );
     writeVerbose(ctx.stderr, ctx.verbose, "cache write summary", ctx.verboseColor, ctx.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({

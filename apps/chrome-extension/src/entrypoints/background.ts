@@ -14,8 +14,8 @@ import { buildChatPageContent } from "../lib/chat-context";
 import { exportYouTubeCookies } from "../lib/cookies";
 import { buildDaemonRequestBody, buildSummarizeRequestBody } from "../lib/daemon-payload";
 import { createDaemonRecovery, isDaemonUnreachableError } from "../lib/daemon-recovery";
-import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { logExtensionEvent } from "../lib/extension-logs";
+import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { loadSettings, patchSettings } from "../lib/settings";
 import { parseSseStream } from "../lib/sse";
 

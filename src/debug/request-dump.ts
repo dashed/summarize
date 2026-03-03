@@ -6,16 +6,11 @@ import type { LlmTokenUsage } from "../llm/types.js";
 const DEBUG_DIR = join(homedir(), ".summarize", "debug");
 
 function isEnabled(): boolean {
-  return (
-    typeof process !== "undefined" &&
-    process.env.SUMMARIZE_DEBUG_DUMP === "true"
-  );
+  return typeof process !== "undefined" && process.env.SUMMARIZE_DEBUG_DUMP === "true";
 }
 
 /** Extract a YouTube video ID from content parts that contain video_url entries. */
-export function extractVideoId(
-  messages: Array<Record<string, unknown>>,
-): string | undefined {
+export function extractVideoId(messages: Array<Record<string, unknown>>): string | undefined {
   for (const msg of messages) {
     const content = msg.content;
     if (!Array.isArray(content)) continue;
@@ -25,16 +20,12 @@ export function extractVideoId(
         part !== null &&
         (part as Record<string, unknown>).type === "video_url"
       ) {
-        const videoUrl = (part as Record<string, { url?: string }>).video_url
-          ?.url;
+        const videoUrl = (part as Record<string, { url?: string }>).video_url?.url;
         if (typeof videoUrl !== "string") continue;
         // youtube.com/watch?v=ID or youtu.be/ID
         try {
           const u = new URL(videoUrl);
-          if (
-            u.hostname === "www.youtube.com" ||
-            u.hostname === "youtube.com"
-          ) {
+          if (u.hostname === "www.youtube.com" || u.hostname === "youtube.com") {
             const v = u.searchParams.get("v");
             if (v) return v;
           }
@@ -53,22 +44,20 @@ export function extractVideoId(
 
 /** Derive a short model name for the filename (e.g. "google/gemini-3-flash-preview" -> "gemini-3-flash-preview"). */
 export function shortModelName(modelId: string): string {
-  const after = modelId.includes("/")
-    ? modelId.slice(modelId.lastIndexOf("/") + 1)
-    : modelId;
+  const after = modelId.includes("/") ? modelId.slice(modelId.lastIndexOf("/") + 1) : modelId;
   // Keep filesystem-safe: replace anything non-alphanumeric/dash/dot with dash
   return after.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
 
 /** Build a filesystem-safe ISO timestamp (colons replaced with dashes). */
 function safeTimestamp(): string {
-  return new Date().toISOString().replace(/:/g, "-").replace(/\.\d+Z$/, "");
+  return new Date()
+    .toISOString()
+    .replace(/:/g, "-")
+    .replace(/\.\d+Z$/, "");
 }
 
-export function buildCurlCommand(
-  url: string,
-  payload: Record<string, unknown>,
-): string {
+export function buildCurlCommand(url: string, payload: Record<string, unknown>): string {
   // Remove stream:true from the payload for curl replay
   const replayPayload = { ...payload };
   delete replayPayload.stream;
@@ -113,9 +102,7 @@ export function dumpVideoRequest(params: DumpVideoRequestParams): void {
   });
 }
 
-async function _dumpVideoRequestAsync(
-  params: DumpVideoRequestParams,
-): Promise<void> {
+async function _dumpVideoRequestAsync(params: DumpVideoRequestParams): Promise<void> {
   const { url, payload, apiKey, modelId, usage, elapsedMs, provider } = params;
   const messages = (payload.messages ?? []) as Array<Record<string, unknown>>;
 

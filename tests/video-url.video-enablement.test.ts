@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { isYouTubeUrl } from "@steipete/summarize-core/content/url";
+import { describe, expect, it } from "vitest";
 
 /**
  * Unit tests for the video enablement logic used in summarizeExtractedUrl.
@@ -11,10 +11,7 @@ import { isYouTubeUrl } from "@steipete/summarize-core/content/url";
  * We replicate and test this decision function here.
  */
 
-function isVideoEnabled(
-  envForRun: Record<string, string | undefined>,
-  url: string,
-): boolean {
+function isVideoEnabled(envForRun: Record<string, string | undefined>, url: string): boolean {
   const envVideo = envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
   return (envVideo === "true" || envVideo === "1") && isYouTubeUrl(url);
 }
@@ -99,15 +96,15 @@ describe("video enablement (summarizeExtractedUrl logic)", () => {
     });
 
     it("returns false for non-YouTube URL even with env=1", () => {
-      expect(
-        isVideoEnabled({ SUMMARIZE_SLIDES_VIDEO: "1" }, "https://vimeo.com/123456"),
-      ).toBe(false);
+      expect(isVideoEnabled({ SUMMARIZE_SLIDES_VIDEO: "1" }, "https://vimeo.com/123456")).toBe(
+        false,
+      );
     });
 
     it("works with youtu.be short URL when env is enabled", () => {
-      expect(
-        isVideoEnabled({ SUMMARIZE_SLIDES_VIDEO: "true" }, "https://youtu.be/abc123"),
-      ).toBe(true);
+      expect(isVideoEnabled({ SUMMARIZE_SLIDES_VIDEO: "true" }, "https://youtu.be/abc123")).toBe(
+        true,
+      );
     });
   });
 });

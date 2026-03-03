@@ -612,9 +612,7 @@ function SummarizeControl(props: SummarizeControlProps) {
   );
 
   const showVideoDetailToggle = Boolean(
-    props.mode === "video" &&
-    props.mediaAvailable &&
-    props.onVideoDetailLevelChange,
+    props.mode === "video" && props.mediaAvailable && props.onVideoDetailLevelChange,
   );
 
   return (

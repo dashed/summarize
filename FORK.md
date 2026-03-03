@@ -1,8 +1,8 @@
 # Fork: dashed/summarize
 
-Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, and **Chrome extension UX improvements**.
+Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, **PDF extraction**, **KaTeX math rendering**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (38 commits ahead of upstream)
+**Version:** `0.11.2-fork` (43 commits ahead of upstream)
 
 ---
 
@@ -13,6 +13,7 @@ Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on *
 The centerpiece of this fork. Sends actual YouTube video URLs and slide images directly to multimodal models (Gemini Flash 3 via OpenRouter) instead of relying solely on text extraction.
 
 **Key capabilities:**
+
 - **`video_url` passthrough** — YouTube URLs sent as `video_url` content parts to Gemini, enabling visual understanding of video content
 - **Interleaved `PromptPart` type** — New type system (`text | image | video_url`) for composing multimodal prompts that flow through the entire LLM pipeline
 - **Gemini timestamp pre-pass** — Replaces ffmpeg scene detection. Sends video URL to Gemini Flash 3 with a JSON schema response format to extract structured timestamps. Runs in parallel with yt-dlp download (zero added latency)
@@ -23,10 +24,12 @@ The centerpiece of this fork. Sends actual YouTube video URLs and slide images d
 - **Agent chat video** — `streamAgentWithVideo()` sends video_url parts in agent/chat mode
 
 **Environment variables:**
+
 - `SUMMARIZE_SLIDES_MULTIMODAL` — Gate sending slide images to model (default: `true`)
 - `SUMMARIZE_SLIDES_VIDEO` — Gate sending video_url to model (default: `true`)
 
 **Key files:**
+
 - `src/llm/prompt.ts` — `PromptPart` type, `hasVideoUrlParts()`, `stripVideoUrlParts()`
 - `src/llm/generate-text.ts` — Video routing in `generateTextWithModelId` and `streamTextWithModelId`
 - `src/llm/providers/openai.ts` — `completeOpenAiTextWithVideo()`, `streamOpenAiTextWithVideo()`, `getVideoTimestampsFromGemini()`
@@ -46,6 +49,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - Uses OpenRouter's unified `reasoning: { effort }` format
 
 **Key files:**
+
 - `src/llm/generate-text.ts` — Detection and resolution functions, param threading
 - `src/llm/providers/openai.ts` — `reasoning: { effort }` in raw fetch payloads
 - `src/daemon/agent.ts` — Reasoning in agent streaming and completion
@@ -62,10 +66,12 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Two-row header** — Title/subtitle on row 1, controls (summarize button, toggles, history/settings icons) on row 2 for better use of narrow sidepanel width
 - **No auto-summarize on options change** — Toggling mode (page/video) or slides doesn't auto-trigger summarization; user must explicitly click Summarize
 - **History current indicator** — Active summary/chat highlighted with "Current" badge in history panel
+- **Chat extraction status** — Shows correct status label for non-video pages (e.g. "Page" instead of "Video") in chat extraction panel
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
 - **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId`, elapsed timer, and progress bar position are preserved across tab switches
 
 **Key files:**
+
 - `apps/chrome-extension/src/entrypoints/sidepanel/progress-stages.ts` — Pipeline stage resolution
 - `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — Progress bar, timer, status bar
 - `apps/chrome-extension/src/entrypoints/sidepanel/style.css` — UI styling
@@ -82,6 +88,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **10 e2e cache tests** — TTL, eviction, metadata, special chars, all cache kinds
 
 **Key files:**
+
 - `src/cache.ts` — `CacheMetadata` type, ALTER TABLE migration
 - `src/daemon/server.ts` — Keep cache store in bypass mode
 - `src/run/flows/url/summary.ts` — Read/write split, enriched metadata at write site
@@ -97,6 +104,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Video detail level toggle** — `VideoDetailLevel` type (`"summary" | "detailed"`) controls YouTube/video prompt behavior. "Detailed" (default) produces comprehensive content extraction with inline `[mm:ss]` timestamps, full video coverage, and visual descriptions. "Summary" produces a brief overview for readers deciding whether to watch, with simplified "Key moments" (3-6 bullets) and article-style length limits. Eliminates the short-length vs detailed-extraction prompt contradiction
 
 **Key files:**
+
 - `packages/core/src/prompts/summary-system.ts` — System prompt reframe
 - `packages/core/src/prompts/link-summary.ts` — Video prompt instructions, timestamp coverage, `VideoDetailLevel` toggle
 - `packages/core/src/prompts/summary-lengths.ts` — Token budget map
@@ -115,6 +123,7 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Auto-save chat to daemon** — Chat sessions auto-saved to daemon SQLite (fire-and-forget) after each assistant response, surviving browser restarts
 
 **Key files:**
+
 - `src/cache.ts` — `listEntries()`, `getEntryWithMeta()`, `CacheEntryInfo` type
 - `src/daemon/server.ts` — History and chat persistence endpoints
 - `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — History panel logic, chat save
@@ -129,61 +138,101 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **`[video-debug]` logging** — Prefixed logs throughout the pipeline for `journalctl | grep video-debug` filtering
 
 **Key files:**
+
 - `src/debug/request-dump.ts` — Request dump with curl replay generation
 - `src/daemon/env-snapshot.ts` — `SUMMARIZE_DEBUG_DUMP` in daemon env snapshot
 
 ---
 
+### 8. PDF Text Extraction
+
+URLs pointing to PDF documents (detected via `application/pdf` content-type) are now handled natively instead of failing with an unsupported content-type error.
+
+- **`unpdf` extraction** — Uses the `unpdf` library (ESM-native, built on pdf.js) to extract text from PDF responses
+- **Fallback chain** — On PDF content-type error: try native extraction via `fetchPdfText()` → if extraction fails (invalid PDF, image-only, encrypted), fall through to Firecrawl → if Firecrawl unavailable, surface original error
+- **`isPdfContentTypeError()` guard** — Detects `application/pdf` content-type rejection errors to trigger the PDF extraction path
+- **`"pdf"` strategy** — New strategy type in `ContentFetchDiagnostics` for tracking which extraction method was used
+
+**Key files:**
+
+- `packages/core/src/content/link-preview/content/fetcher.ts` — `fetchPdfText()`, `isPdfContentTypeError()`
+- `packages/core/src/content/link-preview/content/index.ts` — PDF fallback in `fetchLinkContent()`
+- `packages/core/src/content/link-preview/types.ts` — `"pdf"` in strategy union
+- `src/run/finish-line.ts` — `"pdf"` in `ExtractDiagnosticsForFinishLine`
+
+---
+
+### 9. KaTeX Math Rendering
+
+LaTeX math expressions in summaries and chat responses are rendered using KaTeX in the sidepanel.
+
+- **`@traptitech/markdown-it-katex`** — markdown-it plugin that parses `$...$` (inline) and `$$...$$` (display/block) delimiters
+- **System prompt instructions** — Both summary and agent prompts instruct the model to use LaTeX math notation when content contains mathematical expressions
+- **Error tolerance** — `throwOnError: false` renders malformed math as red error text instead of crashing
+
+**Key files:**
+
+- `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — Plugin registration and KaTeX CSS import
+- `packages/core/src/prompts/summary-system.ts` — Math notation instruction in summary prompt
+- `src/daemon/agent.ts` — `# Math` section in agent prompts
+
+---
+
 ## Commits
 
-38 commits ahead of upstream, oldest to newest:
+43 commits ahead of upstream, oldest to newest:
 
-| # | Hash | Subject | Area |
-|---|------|---------|------|
-| 1 | `fa8441f` | feat: pass Chrome extension cookies to yt-dlp for age-restricted videos | Video |
-| 2 | `4768c4b` | fix: apply snapshot PATH to daemon process.env and add yt-dlp JS solver | Bug Fix |
-| 3 | `a321fc5` | feat: show selected mode on Summarize button and fix manifest version | Extension UX |
-| 4 | `c57b52f` | feat: multimodal slides, YouTube chapters, and video URL passthrough for Gemini | Video |
-| 5 | `d1bcef8` | feat: capture multimodal env vars in daemon snapshot | Video |
-| 6 | `d72c2a8` | feat: fix streaming video URL passthrough and add comprehensive logging | Video |
-| 7 | `8f9d486` | fix: inject video_url even when slide images aren't ready | Video |
-| 8 | `b0197c3` | feat: replace ffmpeg scene detection with Gemini timestamp pre-pass for YouTube | Video |
-| 9 | `35be332` | fix: abort SSE stream on tab/URL switch to prevent stale content | Extension Fix |
-| 10 | `b7677ee` | fix: use curated token budgets for length presets and improve video summary depth | Prompts |
-| 11 | `71ffd46` | fix: sync FALLBACK_VERSION with package.json fork version | Bug Fix |
-| 12 | `0a2b7af` | feat: skip Tesseract OCR when Gemini pre-pass succeeds | Video |
-| 13 | `060f566` | feat: show daemon version and connection status in sidepanel footer | Extension UX |
-| 14 | `7f8468c` | feat: add live progress bar and elapsed timer to sidepanel | Extension UX |
-| 15 | `ec955f2` | feat: pass YouTube video_url multimodal part in agent chat | Video |
-| 16 | `5554d28` | feat: enable reasoning tokens for Gemini thinking models | Reasoning |
-| 17 | `7ad685a` | feat: add streaming video path, provider routing, and reasoning tokens | Video/Reasoning |
-| 18 | `16a42c2` | feat: add video debug logging, request replay dump, and tests | Debug |
-| 19 | `1096b94` | feat: add debug logging to agent chat video/reasoning path | Debug |
-| 20 | `5340af2` | feat: add metadata column to cache for enriched summary diagnostics | Cache |
-| 21 | `6467000` | feat: cache fresh summaries on refresh and add e2e cache tests | Cache |
-| 22 | `ea9c0d5` | feat: enrich cache metadata with prompt, settings, and input stats | Cache |
-| 23 | `5542f3d` | feat: reframe prompts from summarization to content extraction for video | Prompts |
-| 24 | `a1e5eac` | docs: add FORK.md documenting all fork changes | Docs |
-| 25 | `a889c01` | fix: auto-restore summaries on tab switch back | Extension Fix |
-| 26 | `b5ced77` | feat: add summary history and chat session persistence | History |
-| 27 | `baf794a` | fix: filter history entries by current tab URL | History Fix |
-| 28 | `b396369` | fix: use prefix matching for history URL filter | History Fix |
-| 29 | `ec255cb` | docs: update FORK.md with history URL filtering changes | Docs |
-| 30 | `0965600` | fix: add WSL systemd session check to setup script | Infra |
-| 31 | `4bdbed4` | feat: add video detail level toggle for YouTube summary vs detailed mode | Prompts/Extension |
-| 32 | `fe1e492` | feat: split sidepanel header into two rows | Extension UX |
-| 33 | `f7332d6` | fix: store title and siteName in cache metadata for history display | Cache Fix |
-| 34 | `2de9406` | fix: store url and title in asset flow cache metadata | Cache Fix |
-| 35 | `576ee2b` | feat: highlight current summary/chat in history panel | History |
-| 36 | `c70db3e` | fix: remove auto-summarize on options change, extract history utils | Extension Fix |
-| 37 | `f6058f8` | fix: preserve timer and progress bar across tab switches | Extension Fix |
-| 38 | `39144e4` | docs: update FORK.md with tab-switch timer/progress fix | Docs |
+| #   | Hash      | Subject                                                                           | Area              |
+| --- | --------- | --------------------------------------------------------------------------------- | ----------------- |
+| 1   | `fa8441f` | feat: pass Chrome extension cookies to yt-dlp for age-restricted videos           | Video             |
+| 2   | `4768c4b` | fix: apply snapshot PATH to daemon process.env and add yt-dlp JS solver           | Bug Fix           |
+| 3   | `a321fc5` | feat: show selected mode on Summarize button and fix manifest version             | Extension UX      |
+| 4   | `c57b52f` | feat: multimodal slides, YouTube chapters, and video URL passthrough for Gemini   | Video             |
+| 5   | `d1bcef8` | feat: capture multimodal env vars in daemon snapshot                              | Video             |
+| 6   | `d72c2a8` | feat: fix streaming video URL passthrough and add comprehensive logging           | Video             |
+| 7   | `8f9d486` | fix: inject video_url even when slide images aren't ready                         | Video             |
+| 8   | `b0197c3` | feat: replace ffmpeg scene detection with Gemini timestamp pre-pass for YouTube   | Video             |
+| 9   | `35be332` | fix: abort SSE stream on tab/URL switch to prevent stale content                  | Extension Fix     |
+| 10  | `b7677ee` | fix: use curated token budgets for length presets and improve video summary depth | Prompts           |
+| 11  | `71ffd46` | fix: sync FALLBACK_VERSION with package.json fork version                         | Bug Fix           |
+| 12  | `0a2b7af` | feat: skip Tesseract OCR when Gemini pre-pass succeeds                            | Video             |
+| 13  | `060f566` | feat: show daemon version and connection status in sidepanel footer               | Extension UX      |
+| 14  | `7f8468c` | feat: add live progress bar and elapsed timer to sidepanel                        | Extension UX      |
+| 15  | `ec955f2` | feat: pass YouTube video_url multimodal part in agent chat                        | Video             |
+| 16  | `5554d28` | feat: enable reasoning tokens for Gemini thinking models                          | Reasoning         |
+| 17  | `7ad685a` | feat: add streaming video path, provider routing, and reasoning tokens            | Video/Reasoning   |
+| 18  | `16a42c2` | feat: add video debug logging, request replay dump, and tests                     | Debug             |
+| 19  | `1096b94` | feat: add debug logging to agent chat video/reasoning path                        | Debug             |
+| 20  | `5340af2` | feat: add metadata column to cache for enriched summary diagnostics               | Cache             |
+| 21  | `6467000` | feat: cache fresh summaries on refresh and add e2e cache tests                    | Cache             |
+| 22  | `ea9c0d5` | feat: enrich cache metadata with prompt, settings, and input stats                | Cache             |
+| 23  | `5542f3d` | feat: reframe prompts from summarization to content extraction for video          | Prompts           |
+| 24  | `a1e5eac` | docs: add FORK.md documenting all fork changes                                    | Docs              |
+| 25  | `a889c01` | fix: auto-restore summaries on tab switch back                                    | Extension Fix     |
+| 26  | `b5ced77` | feat: add summary history and chat session persistence                            | History           |
+| 27  | `baf794a` | fix: filter history entries by current tab URL                                    | History Fix       |
+| 28  | `b396369` | fix: use prefix matching for history URL filter                                   | History Fix       |
+| 29  | `ec255cb` | docs: update FORK.md with history URL filtering changes                           | Docs              |
+| 30  | `0965600` | fix: add WSL systemd session check to setup script                                | Infra             |
+| 31  | `4bdbed4` | feat: add video detail level toggle for YouTube summary vs detailed mode          | Prompts/Extension |
+| 32  | `fe1e492` | feat: split sidepanel header into two rows                                        | Extension UX      |
+| 33  | `f7332d6` | fix: store title and siteName in cache metadata for history display               | Cache Fix         |
+| 34  | `2de9406` | fix: store url and title in asset flow cache metadata                             | Cache Fix         |
+| 35  | `576ee2b` | feat: highlight current summary/chat in history panel                             | History           |
+| 36  | `c70db3e` | fix: remove auto-summarize on options change, extract history utils               | Extension Fix     |
+| 37  | `8cdab99` | docs: fix FORK.md commit count and hashes                                         | Docs              |
+| 38  | `f6058f8` | fix: preserve timer and progress bar across tab switches                          | Extension Fix     |
+| 39  | `cc9587f` | docs: update FORK.md with tab-switch timer/progress fix                           | Docs              |
+| 40  | `8871c72` | fix: show correct status for non-video pages in chat extraction                   | Extension Fix     |
+| 41  | `1cc6d9a` | test: extract chat status label into testable function with 4 tests               | Tests             |
+| 42  | `f19833d` | feat: add PDF text extraction support for URL summarization                       | Content           |
+| 43  | `5e852e1` | feat: add KaTeX math rendering for $...$ and $$...$$ in sidepanel                 | Extension UX      |
 
 ---
 
 ## Test Coverage
 
-4,147 lines of test code added across 22 test files:
+Test code added across 24 test files:
 
 - `tests/chrome.cookies.test.ts` — Chrome cookie export
 - `tests/slides.build-yt-dlp-cookies-args.test.ts` — yt-dlp cookie args
@@ -210,6 +259,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `tests/video-detail-level.test.ts` — VideoDetailLevel prompt switching (32 tests)
 - `tests/sidepanel.history-utils.test.ts` — History current-indicator resolution logic (18 tests)
 - `tests/sidepanel.header-controller.test.ts` — Header controller progress get/set/reset (5 tests)
+- `tests/chrome-extension.extract-status.test.ts` — Chat extraction status label logic (4 tests)
+- `tests/link-preview.fetcher.pdf.test.ts` — PDF content-type detection and text extraction (10 tests)
 
 ## Architecture Decisions
 
@@ -224,3 +275,5 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 9. **Summary/chat history via existing cache** — Reuses the `cache_entries` SQLite table with `listEntries()` queries rather than adding new tables. Chat sessions keyed by URL+automationEnabled hash using the reserved `"chat"` CacheKind
 10. **URL prefix matching for history** — Uses `LIKE ? || '%'` on `json_extract(metadata, '$.url')` instead of exact match. Extension canonicalizes YouTube URLs (strips `t=`, `si=` params) so the prefix `?v=abc123` matches stored URLs like `?v=abc123&t=637s`
 11. **Video detail level toggle** — Separates "summary" vs "detailed" video modes in the prompt rather than relying on length presets alone. Short length + detailed extraction creates contradictory instructions (900-char limit vs "cover ENTIRE video with timestamps every 1-2 min"); the toggle cleanly separates these concerns
+12. **PDF fallback chain** — On `application/pdf` content-type error, try native text extraction via `unpdf` first (zero external dependencies, fast). If extraction fails (image-only PDF, encrypted, malformed), fall through to Firecrawl. This avoids blocking PDFs entirely while keeping Firecrawl as a robust fallback
+13. **KaTeX via markdown-it plugin** — Renders LaTeX math in the sidepanel using `@traptitech/markdown-it-katex` as a markdown-it plugin, matching system prompt instructions that tell models to emit `$...$` / `$$...$$` notation. Plugin chosen over manual regex because it handles edge cases (nested delimiters, escaping) correctly

@@ -20,7 +20,7 @@ import { parseSseEvent, type SseSlidesData } from "../../../../../src/shared/sse
 import { listSkills } from "../../automation/skills-store";
 import { executeToolCall, getAutomationToolNames } from "../../automation/tools";
 import { readPresetOrCustomValue } from "../../lib/combo";
-import { buildIdleSubtitle } from "../../lib/header";
+import { buildIdleSubtitle, formatModelBadge } from "../../lib/header";
 import { buildMetricsParts, buildMetricsTokens } from "../../lib/metrics";
 import {
   defaultSettings,
@@ -151,6 +151,7 @@ function byId<T extends HTMLElement>(id: string): T {
 
 const subtitleEl = byId<HTMLDivElement>("subtitle");
 const elapsedEl = byId<HTMLSpanElement>("elapsed");
+const modelBadgeEl = byId<HTMLSpanElement>("modelBadge");
 const titleEl = byId<HTMLDivElement>("title");
 const headerEl = document.querySelector("header") as HTMLElement;
 if (!headerEl) throw new Error("Missing <header>");
@@ -1184,6 +1185,7 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
       model: panelState.lastMeta.model,
     }),
   );
+  updateModelBadge();
   setSlidesTranscriptTimedText(payload.transcriptTimedText ?? null);
   if (payload.slides) {
     panelState.slides = {
@@ -2810,6 +2812,11 @@ function updateModelRowUI() {
   modelRefreshBtn.hidden = modelPresetEl.value !== "free";
 }
 
+function updateModelBadge() {
+  const resolved = panelState.lastMeta.model || readCurrentModelValue();
+  modelBadgeEl.textContent = formatModelBadge(resolved);
+}
+
 function setModelValue(value: string) {
   const next = value.trim() || defaultSettings.model;
   const optionValues = new Set(Array.from(modelPresetEl.options).map((o) => o.value));
@@ -3270,6 +3277,7 @@ const streamController = createStreamController({
         model: panelState.lastMeta.model,
       }),
     );
+    updateModelBadge();
     panelCacheController.scheduleSync();
   },
   onSlides: (data) => {
@@ -3759,6 +3767,7 @@ function updateControls(state: UiState) {
     setModelValue(state.settings.model);
   }
   updateModelRowUI();
+  updateModelBadge();
   modelRefreshBtn.disabled = !state.settings.tokenPresent || refreshFreeRunning;
   if (panelState.currentSource) {
     if (state.tab.url && !urlsMatch(state.tab.url, panelState.currentSource.url)) {
@@ -3779,6 +3788,7 @@ function updateControls(state: UiState) {
     panelState.lastMeta = { inputSummary: null, model: null, modelLabel: null };
     headerController.setBaseTitle(state.tab.title || state.tab.url || "Summarize");
     headerController.setBaseSubtitle("");
+    updateModelBadge();
   }
   if (!isStreaming()) {
     headerController.setStatus(state.status);
@@ -4226,7 +4236,12 @@ async function loadHistoryEntry(key: string, mode: string) {
         renderMarkdown(data.value);
         const meta = data.metadata ?? {};
         headerController.setBaseTitle(String(meta.title || meta.url || "Summary"));
-        headerController.setBaseSubtitle(meta.model ? String(meta.model) : "");
+        headerController.setBaseSubtitle("");
+        panelState.lastMeta = {
+          ...panelState.lastMeta,
+          model: typeof meta.model === "string" ? meta.model : null,
+        };
+        updateModelBadge();
         setPhase("idle");
       }
     } catch {
@@ -4569,6 +4584,7 @@ lineLooseBtn.addEventListener("click", () => bumpLineHeight(LINE_HEIGHT_STEP));
 
 modelPresetEl.addEventListener("change", () => {
   updateModelRowUI();
+  updateModelBadge();
   if (!modelCustomEl.hidden) modelCustomEl.focus();
   void (async () => {
     await patchSettings({ model: readCurrentModelValue() });
@@ -4576,6 +4592,7 @@ modelPresetEl.addEventListener("change", () => {
 });
 
 modelCustomEl.addEventListener("change", () => {
+  updateModelBadge();
   void (async () => {
     await patchSettings({ model: readCurrentModelValue() });
   })();
@@ -4653,6 +4670,7 @@ void (async () => {
   setModelValue(s.model);
   setModelPlaceholderFromDiscovery({});
   updateModelRowUI();
+  updateModelBadge();
   modelRefreshBtn.disabled = !s.token.trim();
   applyTypography(s.fontFamily, s.fontSize, s.lineHeight);
   applyTheme({ scheme: s.colorScheme, mode: s.colorMode });

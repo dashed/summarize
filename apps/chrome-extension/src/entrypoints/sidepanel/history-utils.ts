@@ -32,9 +32,7 @@ export function shouldMarkFirstAsCurrent(
   loadedHistoryKey: string | null,
   hasChatActive: boolean,
 ): boolean {
-  return historyMode === "summaries"
-    ? hasSummaryDisplayed && !loadedHistoryKey
-    : hasChatActive;
+  return historyMode === "summaries" ? hasSummaryDisplayed && !loadedHistoryKey : hasChatActive;
 }
 
 /**

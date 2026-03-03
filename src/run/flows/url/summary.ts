@@ -2,8 +2,8 @@ import { isTwitterStatusUrl, isYouTubeUrl } from "@steipete/summarize-core/conte
 import { countTokens } from "gpt-tokenizer";
 import { render as renderMarkdownAnsi } from "markdansi";
 import { promises as fs } from "node:fs";
-import type { Attachment } from "../../../llm/attachments.js";
 import type { ExtractedLinkContent } from "../../../content/index.js";
+import type { Attachment } from "../../../llm/attachments.js";
 import type { Prompt, PromptPart } from "../../../llm/prompt.js";
 import type { ModelAttempt } from "../../types.js";
 import type { UrlExtractionUi } from "./extract.js";
@@ -272,13 +272,18 @@ export async function buildMultimodalSlidesPrompt({
   );
 
   const totalBudget = Number(MAX_SLIDE_TRANSCRIPT_CHARS_BY_PRESET[preset]);
-  const perSlideBudget = Math.max(120, Math.floor(totalBudget / Math.max(1, slidesWithTimestamps.length)));
+  const perSlideBudget = Math.max(
+    120,
+    Math.floor(totalBudget / Math.max(1, slidesWithTimestamps.length)),
+  );
   let remaining = totalBudget;
 
   // Build the interleaved parts: text prompt, optional video URL, then per-slide text+image pairs.
   const parts: PromptPart[] = [{ kind: "text", text: promptText }];
   if (sourceUrl) {
-    console.error(`[summarize:video] buildMultimodalSlidesPrompt: injecting video_url=${sourceUrl}`);
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: injecting video_url=${sourceUrl}`,
+    );
     parts.push({ kind: "video_url", url: sourceUrl });
   }
 
@@ -303,12 +308,13 @@ export async function buildMultimodalSlidesPrompt({
       SLIDE_TRANSCRIPT_LEEWAY_SECONDS;
 
     // Find the chapter this slide belongs to.
-    const chapter = chapters.length > 0
-      ? chapters.reduce<VideoChapter | null>((best, ch) => {
-          if (slide.timestamp >= ch.startTime) return ch;
-          return best;
-        }, null)
-      : null;
+    const chapter =
+      chapters.length > 0
+        ? chapters.reduce<VideoChapter | null>((best, ch) => {
+            if (slide.timestamp >= ch.startTime) return ch;
+            return best;
+          }, null)
+        : null;
 
     // Build transcript excerpt.
     const excerptParts: string[] = [];
@@ -319,12 +325,12 @@ export async function buildMultimodalSlidesPrompt({
     }
     const excerptRaw = excerptParts.join(" ").trim().replace(/\s+/g, " ");
     const excerptBudget = remaining > 0 ? Math.min(perSlideBudget, remaining) : 0;
-    const excerpt = excerptRaw && excerptBudget > 0 ? truncateTranscript(excerptRaw, excerptBudget) : "";
+    const excerpt =
+      excerptRaw && excerptBudget > 0 ? truncateTranscript(excerptRaw, excerptBudget) : "";
 
     // Build text label for this slide.
-    const chapterLabel = chapter && chapter.title !== lastChapterTitle
-      ? `\n[Chapter: ${chapter.title}]\n`
-      : "";
+    const chapterLabel =
+      chapter && chapter.title !== lastChapterTitle ? `\n[Chapter: ${chapter.title}]\n` : "";
     if (chapter) lastChapterTitle = chapter.title;
     const timeRange = `[${formatTimestamp(start)}–${formatTimestamp(end)}]`;
     const slideLabel = `${chapterLabel}[slide:${slide.index}] ${timeRange}`;
@@ -913,9 +919,7 @@ export async function summarizeExtractedUrl({
   // so that fresh summaries are persisted with metadata for future use.
   const cacheStoreForWrite = cacheState.store ?? null;
   const hasCacheStore = cacheStoreForRead || cacheStoreForWrite;
-  const contentHash = hasCacheStore
-    ? hashString(normalizeContentForHash(extracted.content))
-    : null;
+  const contentHash = hasCacheStore ? hashString(normalizeContentForHash(extracted.content)) : null;
   const promptHash = hasCacheStore ? buildPromptHash(prompt) : null;
   const lengthKey = buildLengthKey(flags.lengthArg);
   const languageKey = buildLanguageKey(flags.outputLanguage);
@@ -977,7 +981,10 @@ export async function summarizeExtractedUrl({
         lengthKey,
         languageKey,
       });
-      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
+      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>(
+        "summary",
+        key,
+      );
       const cachedSummary =
         cached && typeof cached.summary === "string" ? cached.summary.trim() : null;
       const cachedModelId = cached && typeof cached.model === "string" ? cached.model.trim() : null;
@@ -1171,7 +1178,13 @@ export async function summarizeExtractedUrl({
       maxTokens: model.desiredOutputTokens,
       preset,
     };
-    cacheStoreForWrite.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs, cacheMeta);
+    cacheStoreForWrite.setText(
+      "summary",
+      perModelKey,
+      summaryResult.summary,
+      cacheState.ttlMs,
+      cacheMeta,
+    );
     writeVerbose(io.stderr, flags.verbose, "cache write summary", flags.verboseColor, io.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({

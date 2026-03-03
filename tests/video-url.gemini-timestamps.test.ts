@@ -2,9 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getVideoTimestampsFromGemini } from "../src/llm/providers/openai.js";
 
 describe("getVideoTimestampsFromGemini", () => {
-  const makeSuccessResponse = (
-    timestamps: Array<{ seconds: number; description: string }>,
-  ) =>
+  const makeSuccessResponse = (timestamps: Array<{ seconds: number; description: string }>) =>
     new Response(
       JSON.stringify({
         choices: [
@@ -184,9 +182,9 @@ describe("getVideoTimestampsFromGemini", () => {
   });
 
   it("throws on non-OK response", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response("Rate limit exceeded", { status: 429 }),
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response("Rate limit exceeded", { status: 429 }));
 
     await expect(
       getVideoTimestampsFromGemini({

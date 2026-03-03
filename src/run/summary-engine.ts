@@ -1,11 +1,11 @@
 import { countTokens } from "gpt-tokenizer";
 import { createMarkdownStreamer, render as renderMarkdownAnsi } from "markdansi";
 import type { CliProvider } from "../config.js";
-import { type Prompt, hasVideoUrlParts, stripVideoUrlParts } from "../llm/prompt.js";
 import type { ModelAttempt, ModelMeta } from "./types.js";
 import { isCliDisabled, runCliModel } from "../llm/cli.js";
 import { streamTextWithModelId } from "../llm/generate-text.js";
 import { parseGatewayStyleModelId } from "../llm/model-id.js";
+import { type Prompt, hasVideoUrlParts, stripVideoUrlParts } from "../llm/prompt.js";
 import { modelSupportsImages } from "../llm/providers/shared.js";
 import { formatCompactCount } from "../tty/format.js";
 import { createRetryLogger, writeVerbose } from "./logging.js";
@@ -261,8 +261,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
 
     // Strip image attachments when the resolved model does not support images,
     // unless the user forces multimodal via SUMMARIZE_SLIDES_MULTIMODAL=true.
-    const hasImageAttachments =
-      prompt.attachments?.some((a) => a.kind === "image") ?? false;
+    const hasImageAttachments = prompt.attachments?.some((a) => a.kind === "image") ?? false;
     const envMultimodal = deps.envForRun.SUMMARIZE_SLIDES_MULTIMODAL?.toLowerCase();
     const multimodalForced = envMultimodal === "true" || envMultimodal === "1";
     const multimodalDisabled = envMultimodal === "false" || envMultimodal === "0";
@@ -298,9 +297,10 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       if (!hasVideo) return effectivePrompt;
       const envVideo = deps.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
       const videoDisabled = envVideo === "false" || envVideo === "0";
-      const videoUrls = effectivePrompt.interleavedParts
-        ?.filter((p) => p.kind === "video_url")
-        .map((p) => (p as { url: string }).url) ?? [];
+      const videoUrls =
+        effectivePrompt.interleavedParts
+          ?.filter((p) => p.kind === "video_url")
+          .map((p) => (p as { url: string }).url) ?? [];
       if (videoDisabled) {
         writeVerbose(
           deps.stderr,

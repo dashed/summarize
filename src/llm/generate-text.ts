@@ -345,8 +345,8 @@ export async function generateTextWithModelId({
   // OpenAI-compatible APIs (including OpenRouter).  For other providers we
   // strip the video parts and fall through to the normal path.
   if (hasVideoUrlParts(prompt)) {
-    const videoUrls = prompt.interleavedParts!
-      .filter((p) => p.kind === "video_url")
+    const videoUrls = prompt
+      .interleavedParts!.filter((p) => p.kind === "video_url")
       .map((p) => (p as { url: string }).url);
     console.error(
       `[summarize:video] non-streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
@@ -638,8 +638,8 @@ export async function streamTextWithModelId({
       forceChatCompletions,
     });
 
-    const videoUrls = prompt.interleavedParts!
-      .filter((p) => p.kind === "video_url")
+    const videoUrls = prompt
+      .interleavedParts!.filter((p) => p.kind === "video_url")
       .map((p) => (p as { url: string }).url);
     console.error(
       `[summarize:video] streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +

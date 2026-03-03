@@ -4,9 +4,10 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { hashString, type CacheState } from "../cache.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import type { SlideExtractionResult, SlideSettings } from "../slides/index.js";
 import type { DaemonConfig } from "./config.js";
+import { hashString, type CacheState } from "../cache.js";
 import { loadSummarizeConfig } from "../config.js";
 import { createDaemonLogger } from "../logging/daemon.js";
 import { runWithProcessContext, setProcessObserver } from "../processes.js";
@@ -29,7 +30,6 @@ import {
   buildProcessLogsResult,
   ProcessRegistry,
 } from "./process-registry.js";
-import type { VideoDetailLevel } from "../prompts/index.js";
 import {
   extractContentForUrl,
   streamSummaryForUrl,
@@ -1696,7 +1696,9 @@ export async function runDaemonServer({
           json(res, 200, { ok: true, messages: [] }, cors);
           return;
         }
-        const key = hashString(JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }));
+        const key = hashString(
+          JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }),
+        );
         const messages = store.getJson<unknown[]>("chat", key);
         json(res, 200, { ok: true, messages: messages ?? [] }, cors);
         return;
@@ -1708,7 +1710,13 @@ export async function runDaemonServer({
           json(res, 400, { ok: false, error: "Invalid body" }, cors);
           return;
         }
-        const { url: bodyUrl, title, automationEnabled, messages, model } = body as Record<string, unknown>;
+        const {
+          url: bodyUrl,
+          title,
+          automationEnabled,
+          messages,
+          model,
+        } = body as Record<string, unknown>;
         if (!bodyUrl || !Array.isArray(messages)) {
           json(res, 400, { ok: false, error: "Missing url or messages" }, cors);
           return;
@@ -1718,7 +1726,9 @@ export async function runDaemonServer({
           json(res, 200, { ok: false, error: "Cache not available" }, cors);
           return;
         }
-        const key = hashString(JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }));
+        const key = hashString(
+          JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }),
+        );
         const metadata = {
           url: bodyUrl,
           title: title ?? null,

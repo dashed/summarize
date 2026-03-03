@@ -5,11 +5,11 @@ import type { Attachment } from "../attachments.js";
 import type { PromptPart } from "../prompt.js";
 import type { LlmTokenUsage } from "../types.js";
 import type { OpenAiClientConfig } from "./types.js";
+import { dumpVideoRequest } from "../../debug/request-dump.js";
 import { createUnsupportedFunctionalityError } from "../errors.js";
 import { normalizeOpenAiUsage, normalizeTokenUsage } from "../usage.js";
 import { resolveOpenAiModel } from "./models.js";
 import { bytesToBase64 } from "./shared.js";
-import { dumpVideoRequest } from "../../debug/request-dump.js";
 
 export type OpenAiClientConfigInput = {
   apiKeys: {
@@ -605,7 +605,9 @@ export function streamOpenAiTextWithVideo({
 
         // Log raw token breakdown including any reasoning/thinking tokens.
         if (lastRawUsage) {
-          const details = lastRawUsage.completion_tokens_details as Record<string, unknown> | undefined;
+          const details = lastRawUsage.completion_tokens_details as
+            | Record<string, unknown>
+            | undefined;
           console.error(
             `[video-debug] streamOpenAiTextWithVideo TOKENS: prompt=${lastRawUsage.prompt_tokens ?? "?"}, ` +
               `completion=${lastRawUsage.completion_tokens ?? "?"}, ` +
@@ -773,9 +775,7 @@ export async function getVideoTimestampsFromGemini({
       console.error(
         `[summarize:video] getVideoTimestampsFromGemini ERROR: ${bodyText.slice(0, 500)}`,
       );
-      const error = new Error(
-        `OpenRouter API error (${response.status}): ${bodyText}`,
-      );
+      const error = new Error(`OpenRouter API error (${response.status}): ${bodyText}`);
       (error as { statusCode?: number }).statusCode = response.status;
       (error as { responseBody?: string }).responseBody = bodyText;
       throw error;
@@ -799,9 +799,7 @@ export async function getVideoTimestampsFromGemini({
 
     const rawContent = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!rawContent) {
-      throw new Error(
-        `getVideoTimestampsFromGemini: LLM returned empty content (model ${model}).`,
-      );
+      throw new Error(`getVideoTimestampsFromGemini: LLM returned empty content (model ${model}).`);
     }
 
     // Try parsing the content as JSON directly, then fall back to extracting

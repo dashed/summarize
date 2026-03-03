@@ -29,9 +29,7 @@ function formatChaptersBlock(
   chapters: { startTime: number; endTime: number; title: string }[] | null | undefined,
 ): string | null {
   if (!chapters || chapters.length === 0) return null;
-  const lines = chapters.map(
-    (ch) => `- [${formatChapterTimestamp(ch.startTime)}] ${ch.title}`,
-  );
+  const lines = chapters.map((ch) => `- [${formatChapterTimestamp(ch.startTime)}] ${ch.title}`);
   return `Video chapters:\n${lines.join("\n")}`;
 }
 
@@ -107,7 +105,8 @@ export function buildLinkSummaryPrompt({
   const chaptersBlock = formatChaptersBlock(chapters);
   const contentParts = [content];
   if (chaptersBlock) contentParts.push(chaptersBlock);
-  if (slidesText.length > 0) contentParts.push(`Slide timeline (transcript excerpts):\n${slidesText}`);
+  if (slidesText.length > 0)
+    contentParts.push(`Slide timeline (transcript excerpts):\n${slidesText}`);
   const contentWithSlides = contentParts.join("\n\n");
   const contentCharacters = contentWithSlides.length;
   const contextLines: string[] = [`Source URL: ${url}`];

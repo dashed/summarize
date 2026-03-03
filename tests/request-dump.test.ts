@@ -57,9 +57,7 @@ describe("extractVideoId", () => {
   });
 
   it("returns undefined when no video_url parts", () => {
-    const messages = [
-      { role: "user", content: [{ type: "text", text: "Hello" }] },
-    ];
+    const messages = [{ role: "user", content: [{ type: "text", text: "Hello" }] }];
     expect(extractVideoId(messages)).toBeUndefined();
   });
 
@@ -101,9 +99,7 @@ describe("extractVideoId", () => {
 
 describe("shortModelName", () => {
   it("strips provider prefix", () => {
-    expect(shortModelName("google/gemini-3-flash-preview")).toBe(
-      "gemini-3-flash-preview",
-    );
+    expect(shortModelName("google/gemini-3-flash-preview")).toBe("gemini-3-flash-preview");
   });
 
   it("strips nested provider prefix", () => {
@@ -206,9 +202,7 @@ describe("dumpVideoRequest", () => {
       elapsedMs: 1000,
     });
     // Should not log anything since it's disabled
-    expect(spy).not.toHaveBeenCalledWith(
-      expect.stringContaining("[summarize:debug]"),
-    );
+    expect(spy).not.toHaveBeenCalledWith(expect.stringContaining("[summarize:debug]"));
     spy.mockRestore();
   });
 
@@ -223,9 +217,7 @@ describe("dumpVideoRequest", () => {
       usage: null,
       elapsedMs: 1000,
     });
-    expect(spy).not.toHaveBeenCalledWith(
-      expect.stringContaining("[summarize:debug]"),
-    );
+    expect(spy).not.toHaveBeenCalledWith(expect.stringContaining("[summarize:debug]"));
     spy.mockRestore();
   });
 });

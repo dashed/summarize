@@ -137,9 +137,7 @@ describe("buildMultimodalSlidesPrompt", () => {
       promptText: "Prompt text.",
       slides: {
         ...baseSlides,
-        slides: [
-          { index: 1, timestamp: 10, imagePath: "" },
-        ],
+        slides: [{ index: 1, timestamp: 10, imagePath: "" }],
       },
       transcriptTimedText: null,
       preset: "medium",

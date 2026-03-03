@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PromptPart } from "../src/llm/prompt.js";
-import { completeOpenAiTextWithVideo, streamOpenAiTextWithVideo } from "../src/llm/providers/openai.js";
+import {
+  completeOpenAiTextWithVideo,
+  streamOpenAiTextWithVideo,
+} from "../src/llm/providers/openai.js";
 
 describe("completeOpenAiTextWithVideo", () => {
   const makeConfig = (overrides?: { baseURL?: string; isOpenRouter?: boolean }) => ({
@@ -15,7 +18,11 @@ describe("completeOpenAiTextWithVideo", () => {
 
     const mockFetch = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const body = JSON.parse(init?.body as string);
-      capturedRequests.push({ url: String(url), body, headers: init?.headers as Record<string, string> });
+      capturedRequests.push({
+        url: String(url),
+        body,
+        headers: init?.headers as Record<string, string>,
+      });
       return new Response(
         JSON.stringify({
           choices: [{ message: { content: "Summary of the video." } }],
@@ -50,7 +57,14 @@ describe("completeOpenAiTextWithVideo", () => {
       model: string;
       messages: Array<{
         role: string;
-        content: string | Array<{ type: string; text?: string; video_url?: { url: string }; image_url?: { url: string } }>;
+        content:
+          | string
+          | Array<{
+              type: string;
+              text?: string;
+              video_url?: { url: string };
+              image_url?: { url: string };
+            }>;
       }>;
       max_tokens?: number;
       temperature?: number;
@@ -93,10 +107,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedUrl = "";
     const mockFetch = vi.fn().mockImplementation(async (url: string | URL) => {
       capturedUrl = String(url);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -114,10 +127,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedHeaders: Record<string, string> | null = null;
     const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
       capturedHeaders = init?.headers as Record<string, string>;
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -133,12 +145,11 @@ describe("completeOpenAiTextWithVideo", () => {
   });
 
   it("throws on empty response", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ choices: [{ message: { content: "" } }] }),
-        { status: 200 },
-      ),
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200 }),
+      );
 
     await expect(
       completeOpenAiTextWithVideo({
@@ -152,9 +163,9 @@ describe("completeOpenAiTextWithVideo", () => {
   });
 
   it("throws on non-OK response", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response("Rate limit exceeded", { status: 429 }),
-    );
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response("Rate limit exceeded", { status: 429 }));
 
     await expect(
       completeOpenAiTextWithVideo({
@@ -171,10 +182,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedBody: unknown = null;
     const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -195,10 +205,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedBody: unknown = null;
     const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -218,10 +227,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedBody: unknown = null;
     const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -246,10 +254,9 @@ describe("completeOpenAiTextWithVideo", () => {
     let capturedBody: unknown = null;
     const mockFetch = vi.fn().mockImplementation(async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(init?.body as string);
-      return new Response(
-        JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200,
+      });
     });
 
     await completeOpenAiTextWithVideo({
@@ -282,12 +289,15 @@ describe("streamOpenAiTextWithVideo provider routing", () => {
       const body = encoder.encode(
         `data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }] })}\n\ndata: [DONE]\n\n`,
       );
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(body);
-          controller.close();
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(body);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
     });
 
     const result = streamOpenAiTextWithVideo({
@@ -323,12 +333,15 @@ describe("streamOpenAiTextWithVideo provider routing", () => {
       const body = encoder.encode(
         `data: ${JSON.stringify({ choices: [{ delta: { content: "OK" } }] })}\n\ndata: [DONE]\n\n`,
       );
-      return new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(body);
-          controller.close();
-        },
-      }), { status: 200 });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(body);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
     });
 
     const result = streamOpenAiTextWithVideo({

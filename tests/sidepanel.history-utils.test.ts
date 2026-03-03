@@ -26,53 +26,37 @@ describe("resolveCurrentKey", () => {
 describe("shouldMarkFirstAsCurrent", () => {
   describe("summaries mode", () => {
     it("marks first when summary displayed and no explicit history load", () => {
-      expect(
-        shouldMarkFirstAsCurrent("summaries", true, null, false),
-      ).toBe(true);
+      expect(shouldMarkFirstAsCurrent("summaries", true, null, false)).toBe(true);
     });
 
     it("does not mark first when no summary displayed", () => {
-      expect(
-        shouldMarkFirstAsCurrent("summaries", false, null, false),
-      ).toBe(false);
+      expect(shouldMarkFirstAsCurrent("summaries", false, null, false)).toBe(false);
     });
 
     it("does not mark first when an explicit history entry is loaded", () => {
-      expect(
-        shouldMarkFirstAsCurrent("summaries", true, "loaded-key", false),
-      ).toBe(false);
+      expect(shouldMarkFirstAsCurrent("summaries", true, "loaded-key", false)).toBe(false);
     });
 
     it("ignores hasChatActive in summaries mode", () => {
-      expect(
-        shouldMarkFirstAsCurrent("summaries", false, null, true),
-      ).toBe(false);
+      expect(shouldMarkFirstAsCurrent("summaries", false, null, true)).toBe(false);
     });
   });
 
   describe("chats mode", () => {
     it("marks first when chat is active", () => {
-      expect(
-        shouldMarkFirstAsCurrent("chats", false, null, true),
-      ).toBe(true);
+      expect(shouldMarkFirstAsCurrent("chats", false, null, true)).toBe(true);
     });
 
     it("does not mark first when no chat active", () => {
-      expect(
-        shouldMarkFirstAsCurrent("chats", false, null, false),
-      ).toBe(false);
+      expect(shouldMarkFirstAsCurrent("chats", false, null, false)).toBe(false);
     });
 
     it("ignores hasSummaryDisplayed in chats mode", () => {
-      expect(
-        shouldMarkFirstAsCurrent("chats", true, null, false),
-      ).toBe(false);
+      expect(shouldMarkFirstAsCurrent("chats", true, null, false)).toBe(false);
     });
 
     it("ignores loadedHistoryKey in chats mode", () => {
-      expect(
-        shouldMarkFirstAsCurrent("chats", false, "some-key", true),
-      ).toBe(true);
+      expect(shouldMarkFirstAsCurrent("chats", false, "some-key", true)).toBe(true);
     });
   });
 });

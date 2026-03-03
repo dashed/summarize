@@ -96,7 +96,12 @@ describe("cache store", () => {
     const path = join(root, "cache.sqlite");
     const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
 
-    const meta = { model: "google/gemini-3-flash", length: "preset:xl", language: "auto", url: "https://example.com" };
+    const meta = {
+      model: "google/gemini-3-flash",
+      length: "preset:xl",
+      language: "auto",
+      url: "https://example.com",
+    };
     store.setText("summary", "k1", "summary text", null, meta);
 
     // Value is still readable via getText
@@ -104,7 +109,9 @@ describe("cache store", () => {
 
     // Verify metadata was persisted in the DB
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "k1") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "k1") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -126,7 +133,9 @@ describe("cache store", () => {
     store.setText("summary", "k1", "value", null);
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "k1") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "k1") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -146,7 +155,9 @@ describe("cache store", () => {
     expect(store.getJson<{ title: string }>("extract", "k1")).toEqual({ title: "Example" });
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("extract", "k1") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("extract", "k1") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -167,7 +178,9 @@ describe("cache store", () => {
     expect(store.getText("summary", "k1")).toBe("v2");
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "k1") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "k1") as { metadata: string | null } | undefined;
     db.close();
 
     const parsed = JSON.parse(row!.metadata!);
@@ -198,7 +211,9 @@ describe("cache store", () => {
     db.exec("CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at)");
     // Insert a row without metadata
     const now = Date.now();
-    db.prepare("INSERT INTO cache_entries (kind, key, value, size_bytes, created_at, last_accessed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("summary", "old-key", "old-value", 9, now, now, null);
+    db.prepare(
+      "INSERT INTO cache_entries (kind, key, value, size_bytes, created_at, last_accessed_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run("summary", "old-key", "old-value", 9, now, now, null);
     db.close();
 
     // Open with createCacheStore — should migrate and work
@@ -213,8 +228,12 @@ describe("cache store", () => {
 
     // Verify metadata column exists and has correct values
     const db2 = new DatabaseSync(path);
-    const oldRow = db2.prepare("SELECT metadata FROM cache_entries WHERE key = ?").get("old-key") as { metadata: string | null } | undefined;
-    const newRow = db2.prepare("SELECT metadata FROM cache_entries WHERE key = ?").get("new-key") as { metadata: string | null } | undefined;
+    const oldRow = db2.prepare("SELECT metadata FROM cache_entries WHERE key = ?").get("old-key") as
+      | { metadata: string | null }
+      | undefined;
+    const newRow = db2.prepare("SELECT metadata FROM cache_entries WHERE key = ?").get("new-key") as
+      | { metadata: string | null }
+      | undefined;
     db2.close();
 
     expect(oldRow!.metadata).toBeNull();
@@ -267,7 +286,12 @@ describe("cache store", () => {
     const path = join(root, "cache.sqlite");
     const store = await createCacheStore({ path, maxBytes: 1024 * 1024 });
 
-    const meta = { model: "openai/gpt-5.2", length: "preset:md", language: "en", url: "https://example.com" };
+    const meta = {
+      model: "openai/gpt-5.2",
+      length: "preset:md",
+      language: "en",
+      url: "https://example.com",
+    };
     // Write with a TTL that has already expired
     store.setText("summary", "ephemeral", "value", -10, meta);
 
@@ -279,7 +303,9 @@ describe("cache store", () => {
     // and confirming the flow works end-to-end. Let's write a fresh entry with short TTL.
     store.setText("summary", "ephemeral2", "value2", 60_000, meta);
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "ephemeral2") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "ephemeral2") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -309,7 +335,9 @@ describe("cache store", () => {
     expect(store.getText("summary", "new-entry")).toBe("b".repeat(80));
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "new-entry") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "new-entry") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -346,7 +374,9 @@ describe("cache store", () => {
     expect(store.getText("summary", "big-meta")).toBe("content");
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "big-meta") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "big-meta") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -375,7 +405,9 @@ describe("cache store", () => {
     store.setText("summary", "special", "value", null, meta);
 
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "special") as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "special") as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -402,7 +434,9 @@ describe("cache store", () => {
 
     const db = new DatabaseSync(path);
     for (const kind of kinds) {
-      const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get(kind, `${kind}-key`) as { metadata: string | null } | undefined;
+      const row = db
+        .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+        .get(kind, `${kind}-key`) as { metadata: string | null } | undefined;
       expect(row).toBeDefined();
       const parsed = JSON.parse(row!.metadata!);
       expect(parsed.kind).toBe(kind);
@@ -448,7 +482,9 @@ describe("cache store", () => {
 
     // Metadata should be the latest one
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", key1) as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", key1) as { metadata: string | null } | undefined;
     db.close();
 
     const parsed = JSON.parse(row!.metadata!);
@@ -475,7 +511,9 @@ describe("cache store", () => {
     // The cache store itself is set to null in bypass mode, so we just verify
     // the original entry survives and can be read on the next normal request
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata, value FROM cache_entries WHERE kind = ? AND key = ?").get("summary", "cached-key") as { metadata: string | null; value: string } | undefined;
+    const row = db
+      .prepare("SELECT metadata, value FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", "cached-key") as { metadata: string | null; value: string } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -500,7 +538,12 @@ describe("cache store", () => {
     });
 
     // First request: cache the summary with metadata
-    const meta = { model: "google/gemini-3-flash", length: "preset:xl", language: "auto", url: "https://youtube.com/watch?v=test" };
+    const meta = {
+      model: "google/gemini-3-flash",
+      length: "preset:xl",
+      language: "auto",
+      url: "https://youtube.com/watch?v=test",
+    };
     store.setText("summary", key, "original summary text", null, meta);
     expect(store.getText("summary", key)).toBe("original summary text");
 
@@ -513,7 +556,9 @@ describe("cache store", () => {
 
     // Verify metadata is still intact from the original write
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?").get("summary", key) as { metadata: string | null } | undefined;
+    const row = db
+      .prepare("SELECT metadata FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", key) as { metadata: string | null } | undefined;
     db.close();
 
     expect(row).toBeDefined();
@@ -553,7 +598,9 @@ describe("cache store", () => {
 
     // Verify metadata was persisted
     const db = new DatabaseSync(path);
-    const row = db.prepare("SELECT metadata, size_bytes FROM cache_entries WHERE kind = ? AND key = ?").get("summary", key) as { metadata: string | null; size_bytes: number } | undefined;
+    const row = db
+      .prepare("SELECT metadata, size_bytes FROM cache_entries WHERE kind = ? AND key = ?")
+      .get("summary", key) as { metadata: string | null; size_bytes: number } | undefined;
     db.close();
 
     expect(row).toBeDefined();
