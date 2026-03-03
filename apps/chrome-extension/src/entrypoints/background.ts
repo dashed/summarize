@@ -14,6 +14,7 @@ import { buildChatPageContent } from "../lib/chat-context";
 import { exportYouTubeCookies } from "../lib/cookies";
 import { buildDaemonRequestBody, buildSummarizeRequestBody } from "../lib/daemon-payload";
 import { createDaemonRecovery, isDaemonUnreachableError } from "../lib/daemon-recovery";
+import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { logExtensionEvent } from "../lib/extension-logs";
 import { loadSettings, patchSettings } from "../lib/settings";
 import { parseSseStream } from "../lib/sse";
@@ -872,12 +873,7 @@ export default defineBackground(() => {
 
     const wantsSlides = settings.slidesEnabled && shouldPreferUrlMode(tab.url);
     const cookies = wantsSlides ? await exportYouTubeCookies() : null;
-    const urlStatusLabel = wantsSlides
-      ? "Extracting video + thumbnails…"
-      : preferUrl
-        ? "Extracting video transcript…"
-        : "Extracting page content…";
-    sendStatus(session, urlStatusLabel);
+    sendStatus(session, resolveChatExtractStatusLabel(preferUrl, wantsSlides));
     const extractTimeoutMs = wantsSlides ? 6 * 60_000 : 3 * 60_000;
     const extractController = new AbortController();
     const extractTimeout = setTimeout(() => {
