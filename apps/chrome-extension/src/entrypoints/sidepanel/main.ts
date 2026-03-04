@@ -21,6 +21,7 @@ import { listSkills } from "../../automation/skills-store";
 import { executeToolCall, getAutomationToolNames } from "../../automation/tools";
 import { readPresetOrCustomValue } from "../../lib/combo";
 import { buildIdleSubtitle, formatModelBadge } from "../../lib/header";
+import { canonicalizeUrlForHistory, parseSummaryHistoryMeta } from "../../lib/history";
 import { buildMetricsParts, buildMetricsTokens } from "../../lib/metrics";
 import {
   defaultSettings,
@@ -2727,6 +2728,60 @@ async function restoreChatHistory() {
   }
 }
 
+/**
+ * When the panel cache is lost (e.g. background worker recycled, extension restarted),
+ * try to restore the most recent summary for a URL from the daemon's history store.
+ * This mirrors how `restoreChatHistory()` falls back to the daemon for chat messages.
+ */
+let summaryRestoreLoadId = 0;
+
+async function restoreSummaryFromHistory(url: string) {
+  if (panelState.summaryMarkdown) return;
+  summaryRestoreLoadId += 1;
+  const loadId = summaryRestoreLoadId;
+  try {
+    const token = await getAuthToken();
+    if (!token) return;
+    const canonical = canonicalizeUrlForHistory(url);
+    if (!canonical) return;
+    const listRes = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const listData = (await listRes.json()) as {
+      ok?: boolean;
+      summaries?: Array<{ key: string; metadata: Record<string, unknown> | null }>;
+    };
+    if (loadId !== summaryRestoreLoadId) return;
+    if (!listData.ok || !listData.summaries?.length) return;
+    if (panelState.summaryMarkdown) return;
+    if (activeTabUrl !== url) return;
+    const entry = listData.summaries[0];
+    const detailRes = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(entry.key)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const detailData = (await detailRes.json()) as {
+      ok?: boolean;
+      value?: string;
+      metadata?: Record<string, unknown> | null;
+    };
+    if (loadId !== summaryRestoreLoadId) return;
+    if (!detailData.ok || !detailData.value) return;
+    if (panelState.summaryMarkdown) return;
+    if (activeTabUrl !== url) return;
+    renderMarkdown(detailData.value);
+    const { title, model } = parseSummaryHistoryMeta(detailData.metadata);
+    headerController.setBaseTitle(title);
+    headerController.setBaseSubtitle("");
+    panelState.lastMeta = { ...panelState.lastMeta, model };
+    updateModelBadge();
+    setPhase("idle");
+  } catch {
+    // ignore
+  }
+}
+
 type PlatformKind = "mac" | "windows" | "linux" | "other";
 
 function resolvePlatformKind(): PlatformKind {
@@ -3892,7 +3947,12 @@ function handleBgMessage(msg: BgToPanel) {
       const result = panelCacheController.consumeResponse(msg);
       if (!result) return;
       if (activeTabId !== result.tabId || activeTabUrl !== result.url) return;
-      if (!result.cache) return;
+      if (!result.cache) {
+        // Cache lost (background worker recycled, extension restarted) —
+        // try to restore the summary from daemon history as a fallback.
+        void restoreSummaryFromHistory(result.url);
+        return;
+      }
       applyPanelCache(result.cache, { preserveChat: result.preserveChat });
       return;
     }
@@ -4091,28 +4151,6 @@ async function getAuthToken(): Promise<string> {
   return (await loadSettings()).token.trim();
 }
 
-/** Strip transient query params (t, si, feature) so history matches the canonical URL. */
-function canonicalizeUrlForHistory(raw: string): string {
-  try {
-    const u = new URL(raw);
-    // YouTube: keep only the v= param (or /shorts/ path)
-    if (u.hostname.includes("youtube.com") || u.hostname.includes("youtu.be")) {
-      const videoId = u.searchParams.get("v");
-      if (videoId) {
-        u.search = `?v=${videoId}`;
-      } else {
-        u.search = "";
-      }
-      u.hash = "";
-      return u.toString();
-    }
-    // Non-YouTube: keep origin + pathname (strip all query/hash)
-    return u.origin + u.pathname;
-  } catch {
-    return raw;
-  }
-}
-
 async function loadHistory() {
   const token = await getAuthToken();
   if (!token) {
@@ -4234,13 +4272,10 @@ async function loadHistoryEntry(key: string, mode: string) {
         historyPanelEl.classList.add("hidden");
         historyToggleBtn.classList.remove("isActive");
         renderMarkdown(data.value);
-        const meta = data.metadata ?? {};
-        headerController.setBaseTitle(String(meta.title || meta.url || "Summary"));
+        const { title, model } = parseSummaryHistoryMeta(data.metadata);
+        headerController.setBaseTitle(title);
         headerController.setBaseSubtitle("");
-        panelState.lastMeta = {
-          ...panelState.lastMeta,
-          model: typeof meta.model === "string" ? meta.model : null,
-        };
+        panelState.lastMeta = { ...panelState.lastMeta, model };
         updateModelBadge();
         setPhase("idle");
       }
