@@ -46,3 +46,18 @@ export function isCurrentEntry(
 ): boolean {
   return entryKey === currentKey || (markFirstAsCurrent && index === 0);
 }
+
+/**
+ * Determines whether the history panel should be refreshed after a
+ * navigation event (tab switch or same-tab URL change).
+ *
+ * Returns true when the history panel is currently visible AND either
+ * the active tab changed or the URL within the same tab changed.
+ */
+export function shouldRefreshHistoryOnNavigation(
+  tabChanged: boolean,
+  urlChanged: boolean,
+  historyOpen: boolean,
+): boolean {
+  return (tabChanged || urlChanged) && historyOpen;
+}

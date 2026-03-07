@@ -1710,7 +1710,26 @@ export async function runDaemonServer({
           pageContent: typeof pageContent === "string" ? pageContent : null,
           cacheContent: typeof cacheContent === "string" ? cacheContent : null,
         });
-        const messages = store.getJson<unknown[]>("chat", key);
+        let messages = store.getJson<unknown[]>("chat", key);
+        // Fallback: if the content-aware key misses (e.g. after extension reload
+        // when re-extraction produces different text), look up by URL via the
+        // cache index which stores all chat entries with URL metadata.
+        if (!messages?.length) {
+          const entries = store.listEntries("chat", {
+            filterUrl: String(bodyUrl),
+            limit: 1,
+          });
+          if (entries.length > 0) {
+            const entry = store.getEntryWithMeta("chat", entries[0].key);
+            if (entry?.value) {
+              try {
+                messages = JSON.parse(entry.value) as unknown[];
+              } catch {
+                // ignore parse errors
+              }
+            }
+          }
+        }
         json(res, 200, { ok: true, messages: messages ?? [] }, cors);
         return;
       }

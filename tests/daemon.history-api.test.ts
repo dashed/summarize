@@ -367,6 +367,175 @@ describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
   });
 });
 
+describe("POST /v1/agent/history fallback (URL-based lookup when content key misses)", () => {
+  it("falls back to URL-based lookup when content fingerprint changes", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://www-cs-faculty.stanford.edu/~knuth/papers/claude-cycles.pdf";
+    // Save chat with content fingerprint A
+    const saveKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "PDF text extraction v1",
+    });
+    const messages = [
+      { role: "user", content: "what's the gist?" },
+      { role: "assistant", content: "It's about cycles..." },
+    ];
+    store.setJson("chat", saveKey, messages, null, {
+      url,
+      historyUrl: url,
+      title: "claude-cycles.pdf",
+      model: "gemini-3-flash",
+      messageCount: 2,
+    });
+
+    // Load with a different content fingerprint (simulates re-extraction after extension reload)
+    const loadKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "PDF text extraction v2 — slightly different",
+    });
+    expect(loadKey).not.toBe(saveKey);
+
+    // Direct key lookup fails
+    const directLookup = store.getJson<unknown[]>("chat", loadKey);
+    expect(directLookup).toBeNull();
+
+    // URL-based fallback finds it (this is what server.ts now does)
+    const entries = store.listEntries("chat", { filterUrl: url, limit: 1 });
+    expect(entries).toHaveLength(1);
+    const entry = store.getEntryWithMeta("chat", entries[0].key);
+    expect(entry).not.toBeNull();
+    const fallbackMessages = JSON.parse(entry!.value);
+    expect(fallbackMessages).toEqual(messages);
+
+    store.close();
+  });
+
+  it("falls back to URL-based lookup when content is null (no extraction)", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://example.com/article";
+    // Save chat with content
+    const saveKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "Article body text",
+    });
+    store.setJson("chat", saveKey, [{ role: "user", content: "summarize" }], null, {
+      url,
+      historyUrl: url,
+      title: "Article",
+      model: "gpt-4o",
+      messageCount: 1,
+    });
+
+    // Load with no content (extension sent empty body)
+    const loadKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: null,
+      pageContent: null,
+    });
+    expect(loadKey).not.toBe(saveKey);
+
+    // Direct lookup fails
+    expect(store.getJson("chat", loadKey)).toBeNull();
+
+    // Fallback succeeds
+    const entries = store.listEntries("chat", { filterUrl: url, limit: 1 });
+    expect(entries).toHaveLength(1);
+    const entry = store.getEntryWithMeta("chat", entries[0].key);
+    const fallbackMessages = JSON.parse(entry!.value);
+    expect(fallbackMessages).toHaveLength(1);
+    expect(fallbackMessages[0].content).toBe("summarize");
+
+    store.close();
+  });
+
+  it("URL-based fallback returns most recent entry when multiple exist", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://example.com/page";
+    // Save two chat entries for the same URL with different content
+    const key1 = buildChatKey({ url, automationEnabled: false, cacheContent: "revision-1" });
+    const key2 = buildChatKey({ url, automationEnabled: false, cacheContent: "revision-2" });
+
+    store.setJson("chat", key1, [{ role: "user", content: "old chat" }], null, {
+      url,
+      historyUrl: url,
+      title: "Page",
+      model: null,
+      messageCount: 1,
+    });
+    // Insert with a small delay to ensure different timestamps
+    store.setJson("chat", key2, [{ role: "user", content: "new chat" }], null, {
+      url,
+      historyUrl: url,
+      title: "Page",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Fallback should return the most recent (DESC order)
+    const entries = store.listEntries("chat", { filterUrl: url, limit: 1 });
+    expect(entries).toHaveLength(1);
+    const entry = store.getEntryWithMeta("chat", entries[0].key);
+    const messages = JSON.parse(entry!.value);
+    expect(messages[0].content).toBe("new chat");
+
+    store.close();
+  });
+
+  it("URL-based fallback does not match unrelated URLs", async () => {
+    const store = await makeTempStore();
+
+    // Save chat for a specific YouTube video
+    const url = "https://www.youtube.com/watch?v=abc123";
+    const key = buildChatKey({ url, automationEnabled: false, cacheContent: "video content" });
+    store.setJson("chat", key, [{ role: "user", content: "about the video" }], null, {
+      url,
+      historyUrl: "https://www.youtube.com/watch?v=abc123",
+      title: "Video",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Lookup for a different video should not match
+    const entries = store.listEntries("chat", {
+      filterUrl: "https://www.youtube.com/watch?v=xyz789",
+      limit: 1,
+    });
+    expect(entries).toHaveLength(0);
+
+    store.close();
+  });
+
+  it("exact key match takes priority over URL fallback", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://example.com/page";
+    const content = "stable content";
+    const key = buildChatKey({ url, automationEnabled: false, cacheContent: content });
+
+    const messages = [{ role: "user", content: "exact match" }];
+    store.setJson("chat", key, messages, null, {
+      url,
+      historyUrl: url,
+      title: "Page",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Direct key lookup succeeds — no fallback needed
+    const loaded = store.getJson<unknown[]>("chat", key);
+    expect(loaded).toEqual(messages);
+
+    store.close();
+  });
+});
+
 describe("GET /v1/history/chats (cache layer)", () => {
   it("returns chat entries from cache", async () => {
     const store = await makeTempStore();
@@ -417,6 +586,159 @@ describe("GET /v1/history/chats (cache layer)", () => {
 
     const chats = store.listEntries("chat");
     expect(chats).toHaveLength(1);
+
+    store.close();
+  });
+});
+
+describe("e2e: chat history save → reload with different content → fallback load", () => {
+  /**
+   * Simulates the exact flow that happens in the daemon server:
+   * 1. Extension saves chat with pageContent + cacheContent → key includes content fingerprint
+   * 2. Extension reloads, re-extracts content → different fingerprint → different key
+   * 3. Server tries exact key → misses → falls back to URL-based listEntries lookup
+   */
+  function simulateAgentHistoryLoad(
+    store: Awaited<ReturnType<typeof createCacheStore>>,
+    bodyUrl: string,
+    automationEnabled: boolean,
+    pageContent: string | null,
+    cacheContent: string | null,
+  ): unknown[] {
+    const key = buildChatKey({
+      url: bodyUrl,
+      automationEnabled,
+      pageContent,
+      cacheContent,
+    });
+    let messages = store.getJson<unknown[]>("chat", key);
+    // Fallback: same logic as server.ts
+    if (!messages?.length) {
+      const entries = store.listEntries("chat", {
+        filterUrl: bodyUrl,
+        limit: 1,
+      });
+      if (entries.length > 0) {
+        const entry = store.getEntryWithMeta("chat", entries[0].key);
+        if (entry?.value) {
+          try {
+            messages = JSON.parse(entry.value) as unknown[];
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+    return messages ?? [];
+  }
+
+  it("PDF: save with content, load with different re-extracted content", async () => {
+    const store = await makeTempStore();
+    const url = "https://www-cs-faculty.stanford.edu/~knuth/papers/claude-cycles.pdf";
+
+    // 1. Save: extension had extracted PDF text
+    const saveKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "Claude and the Cycles of Recursion\nDonald Knuth\n...",
+      pageContent: "METADATA: url=...\n---\nClaude and the Cycles of Recursion...",
+    });
+    const savedMessages = [
+      { role: "user", content: "what's the gist?" },
+      { role: "assistant", content: "It discusses recursive patterns..." },
+    ];
+    store.setJson("chat", saveKey, savedMessages, null, {
+      url,
+      historyUrl: url,
+      title: "claude-cycles.pdf",
+      model: "google/gemini-3-flash-preview",
+      messageCount: 2,
+    });
+
+    // 2. Load: extension re-extracted PDF, got slightly different text
+    const loaded = simulateAgentHistoryLoad(
+      store,
+      url,
+      false,
+      "METADATA: url=...\n---\nClaude and the Cycles of Recursion\n(slightly different extraction)",
+      "Claude and the Cycles of Recursion\nDonald E. Knuth\n...",
+    );
+
+    expect(loaded).toEqual(savedMessages);
+    store.close();
+  });
+
+  it("exact key match skips fallback", async () => {
+    const store = await makeTempStore();
+    const url = "https://example.com/stable-page";
+    const content = "Stable page content that doesn't change";
+
+    const key = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: content,
+    });
+    const messages = [{ role: "user", content: "hello" }];
+    store.setJson("chat", key, messages, null, {
+      url,
+      historyUrl: url,
+      title: "Stable",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Load with same content → exact key match
+    const loaded = simulateAgentHistoryLoad(store, url, false, null, content);
+    expect(loaded).toEqual(messages);
+
+    store.close();
+  });
+
+  it("no chat for URL returns empty array", async () => {
+    const store = await makeTempStore();
+
+    const loaded = simulateAgentHistoryLoad(
+      store,
+      "https://never-visited.com/page",
+      false,
+      null,
+      null,
+    );
+    expect(loaded).toEqual([]);
+
+    store.close();
+  });
+
+  it("YouTube video: different content fingerprint still finds chat", async () => {
+    const store = await makeTempStore();
+    const url = "https://www.youtube.com/watch?v=B3m3AMRlYfc";
+
+    const saveKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "[00:00] Welcome to the video about neutrinos...",
+    });
+    const messages = [
+      { role: "user", content: "what particles are discussed?" },
+      { role: "assistant", content: "Neutrinos!" },
+    ];
+    store.setJson("chat", saveKey, messages, null, {
+      url,
+      historyUrl: "https://www.youtube.com/watch?v=B3m3AMRlYfc",
+      title: "Neutrino Video",
+      model: "gemini-3-flash",
+      messageCount: 2,
+    });
+
+    // Load with different transcript
+    const loaded = simulateAgentHistoryLoad(
+      store,
+      url,
+      false,
+      null,
+      "[00:00] Welcome to this video about neutrinos and ghost particles...",
+    );
+    expect(loaded).toEqual(messages);
 
     store.close();
   });

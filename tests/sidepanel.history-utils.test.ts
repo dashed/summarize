@@ -3,6 +3,7 @@ import {
   isCurrentEntry,
   resolveCurrentKey,
   shouldMarkFirstAsCurrent,
+  shouldRefreshHistoryOnNavigation,
 } from "../apps/chrome-extension/src/entrypoints/sidepanel/history-utils.js";
 
 describe("resolveCurrentKey", () => {
@@ -84,5 +85,35 @@ describe("isCurrentEntry", () => {
 
   it("returns false when no currentKey and markFirstAsCurrent is false", () => {
     expect(isCurrentEntry("key-1", 0, null, false)).toBe(false);
+  });
+});
+
+describe("shouldRefreshHistoryOnNavigation", () => {
+  it("refreshes when tab changed and history is open", () => {
+    expect(shouldRefreshHistoryOnNavigation(true, false, true)).toBe(true);
+  });
+
+  it("refreshes when URL changed and history is open", () => {
+    expect(shouldRefreshHistoryOnNavigation(false, true, true)).toBe(true);
+  });
+
+  it("refreshes when both tab and URL changed and history is open", () => {
+    expect(shouldRefreshHistoryOnNavigation(true, true, true)).toBe(true);
+  });
+
+  it("does not refresh when history is closed even if tab changed", () => {
+    expect(shouldRefreshHistoryOnNavigation(true, false, false)).toBe(false);
+  });
+
+  it("does not refresh when history is closed even if URL changed", () => {
+    expect(shouldRefreshHistoryOnNavigation(false, true, false)).toBe(false);
+  });
+
+  it("does not refresh when nothing changed even if history is open", () => {
+    expect(shouldRefreshHistoryOnNavigation(false, false, true)).toBe(false);
+  });
+
+  it("does not refresh when nothing changed and history is closed", () => {
+    expect(shouldRefreshHistoryOnNavigation(false, false, false)).toBe(false);
   });
 });

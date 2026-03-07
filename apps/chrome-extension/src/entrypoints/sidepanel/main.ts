@@ -42,7 +42,12 @@ import { buildChatHistoryStorageKey } from "./chat-history-store";
 import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
-import { isCurrentEntry, resolveCurrentKey, shouldMarkFirstAsCurrent } from "./history-utils";
+import {
+  isCurrentEntry,
+  resolveCurrentKey,
+  shouldMarkFirstAsCurrent,
+  shouldRefreshHistoryOnNavigation,
+} from "./history-utils";
 import {
   createPanelCacheController,
   resolveRestoreAction,
@@ -3844,6 +3849,10 @@ function updateControls(state: UiState) {
     ) {
       void appendNavigationMessage(nextTabUrl, state.tab.title ?? null);
     }
+  }
+
+  if (shouldRefreshHistoryOnNavigation(tabChanged, urlChanged, historyOpen)) {
+    void loadHistory();
   }
 
   autoValue = state.settings.autoSummarize;
