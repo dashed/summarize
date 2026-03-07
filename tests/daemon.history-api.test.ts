@@ -8,6 +8,7 @@
  * - POST /v1/agent/history → store.getJson("chat", key) with hashed key
  * - POST /v1/agent/history/save → store.setJson("chat", key, messages, ttl, meta)
  * - GET /v1/history/chats → store.listEntries("chat", ...)
+ * - GET /v1/history/chats/:key → store.getEntryWithMeta("chat", key)
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -586,6 +587,71 @@ describe("GET /v1/history/chats (cache layer)", () => {
 
     const chats = store.listEntries("chat");
     expect(chats).toHaveLength(1);
+
+    store.close();
+  });
+});
+
+describe("GET /v1/history/chats/:key (cache layer)", () => {
+  it("returns full chat entry with metadata", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://example.com/page";
+    const key = buildChatKey({ url, automationEnabled: false, cacheContent: "Page content" });
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi there" },
+    ];
+    const meta = {
+      url,
+      historyUrl: url,
+      title: "My Page",
+      model: "gemini-3-flash",
+      messageCount: 2,
+    };
+    store.setJson("chat", key, messages, null, meta);
+
+    const entry = store.getEntryWithMeta("chat", key);
+
+    expect(entry).not.toBeNull();
+    const parsed = JSON.parse(entry!.value);
+    expect(parsed).toEqual(messages);
+    expect(entry!.created_at).toBeGreaterThan(0);
+    expect(entry!.metadata).toEqual(meta);
+
+    store.close();
+  });
+
+  it("returns null for nonexistent chat key (404 in API)", async () => {
+    const store = await makeTempStore();
+
+    const entry = store.getEntryWithMeta("chat", "missing-chat-key");
+    expect(entry).toBeNull();
+
+    store.close();
+  });
+
+  it("returns chat value as JSON-serialized message array", async () => {
+    const store = await makeTempStore();
+
+    const key = buildChatKey({
+      url: "https://example.com",
+      automationEnabled: false,
+      cacheContent: "text",
+    });
+    const messages = [
+      { role: "user", content: "what is this?" },
+      { role: "assistant", content: [{ type: "text", text: "It's a test page." }] },
+    ];
+    store.setJson("chat", key, messages, null);
+
+    const entry = store.getEntryWithMeta("chat", key);
+    expect(entry).not.toBeNull();
+    const parsed = JSON.parse(entry!.value);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].role).toBe("user");
+    expect(parsed[1].role).toBe("assistant");
+    expect(parsed[1].content).toEqual([{ type: "text", text: "It's a test page." }]);
 
     store.close();
   });

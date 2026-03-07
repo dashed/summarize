@@ -4408,7 +4408,38 @@ async function loadHistoryEntry(key: string, mode: string) {
       // ignore
     }
   }
-  // Chat loading can be added later
+  if (mode === "chats") {
+    const token = await getAuthToken();
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8787/v1/history/chats/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        value?: string;
+        metadata?: Record<string, unknown> | null;
+      };
+      if (data.ok && data.value) {
+        const raw = JSON.parse(data.value) as unknown[];
+        const parsed = raw
+          .filter((msg) => msg && typeof msg === "object")
+          .map((msg) => normalizeStoredMessage(msg as Record<string, unknown>))
+          .filter((msg): msg is ChatMessage => Boolean(msg));
+        if (parsed.length) {
+          resetChatState();
+          const compacted = compactChatHistory(parsed, chatLimits);
+          chatController.setMessages(compacted, { scroll: true });
+        }
+        historyOpen = false;
+        historyPanelEl.classList.add("hidden");
+        historyToggleBtn.classList.remove("isActive");
+      }
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function toggleHistoryPanel() {

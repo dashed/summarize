@@ -1791,6 +1791,23 @@ export async function runDaemonServer({
         return;
       }
 
+      const chatKeyMatch = pathname.match(/^\/v1\/history\/chats\/(.+)$/);
+      if (req.method === "GET" && chatKeyMatch) {
+        const key = decodeURIComponent(chatKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const entry = store.getEntryWithMeta("chat", key);
+        if (!entry) {
+          json(res, 404, { ok: false, error: "Chat not found" }, cors);
+          return;
+        }
+        json(res, 200, { ok: true, ...entry }, cors);
+        return;
+      }
+
       text(res, 404, "Not found", cors);
     })().catch((error) => {
       const origin = resolveOriginHeader(req);
