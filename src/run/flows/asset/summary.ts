@@ -695,6 +695,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       historyUrl: buildHistoryUrlMetadata(args.url ?? null),
       title: args.title ?? null,
       summaryChars: summaryResult.summary.length,
+      preview: summaryResult.summary.replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\n+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120),
       prompt: promptText,
       systemPrompt: SUMMARY_SYSTEM_PROMPT,
       contentChars: textContent?.content.length ?? null,

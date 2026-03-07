@@ -177,12 +177,20 @@
 
     <section id="historyPanel" class="historyPanel hidden" aria-label="History">
       <div class="historyHeader">
-        <h3 class="historyTitle">History</h3>
-        <div class="historyTabs">
-          <button id="historyTabSummaries" type="button" class="ghost small historyTab active">
-            Summaries
+        <div class="historyHeader__left">
+          <h3 class="historyTitle">History</h3>
+          <span id="historySubtitle" class="historySubtitle"></span>
+        </div>
+        <div class="historyHeader__right">
+          <div class="historyTabs">
+            <button id="historyTabSummaries" type="button" class="ghost small historyTab active">
+              Summaries
+            </button>
+            <button id="historyTabChats" type="button" class="ghost small historyTab">Chats</button>
+          </div>
+          <button id="historyClose" type="button" class="ghost icon historyCloseBtn" aria-label="Close history">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
-          <button id="historyTabChats" type="button" class="ghost small historyTab">Chats</button>
         </div>
       </div>
       <div id="historyList" class="historyList"></div>
@@ -191,6 +199,10 @@
 
     <main>
       <div id="setup" class="setup hidden"></div>
+      <div id="summaryHistoryBanner" class="summaryHistoryBanner hidden" role="status">
+        <span id="summaryHistoryBannerText"></span>
+        <button id="summaryHistoryBannerDismiss" type="button" class="ghost small" aria-label="Return to current summary">Back to current</button>
+      </div>
       <article id="render" class="render"></article>
       <pre id="raw" class="raw hidden"></pre>
 

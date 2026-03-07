@@ -657,6 +657,79 @@ describe("GET /v1/history/chats/:key (cache layer)", () => {
   });
 });
 
+describe("DELETE /v1/history/summaries/:key (cache layer)", () => {
+  it("deletes an existing summary entry", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "sum-to-delete", "# Content", null, { url: "https://example.com" });
+    expect(store.getEntryWithMeta("summary", "sum-to-delete")).not.toBeNull();
+
+    const deleted = store.deleteEntry("summary", "sum-to-delete");
+    expect(deleted).toBe(true);
+
+    expect(store.getEntryWithMeta("summary", "sum-to-delete")).toBeNull();
+    store.close();
+  });
+
+  it("returns false when deleting a nonexistent key", async () => {
+    const store = await makeTempStore();
+
+    const deleted = store.deleteEntry("summary", "nonexistent-key");
+    expect(deleted).toBe(false);
+
+    store.close();
+  });
+
+  it("does not affect other entries", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "keep-me", "# Keep", null, { url: "https://example.com/keep" });
+    store.setText("summary", "delete-me", "# Delete", null, { url: "https://example.com/del" });
+
+    store.deleteEntry("summary", "delete-me");
+
+    expect(store.getEntryWithMeta("summary", "keep-me")).not.toBeNull();
+    expect(store.listEntries("summary")).toHaveLength(1);
+    store.close();
+  });
+});
+
+describe("DELETE /v1/history/chats/:key (cache layer)", () => {
+  it("deletes an existing chat entry", async () => {
+    const store = await makeTempStore();
+
+    const key = buildChatKey({ url: "https://example.com", automationEnabled: false, cacheContent: "content" });
+    store.setJson("chat", key, [{ role: "user", content: "hi" }], null, {
+      url: "https://example.com",
+      messageCount: 1,
+    });
+    expect(store.getEntryWithMeta("chat", key)).not.toBeNull();
+
+    const deleted = store.deleteEntry("chat", key);
+    expect(deleted).toBe(true);
+
+    expect(store.getEntryWithMeta("chat", key)).toBeNull();
+    store.close();
+  });
+
+  it("does not delete across kinds (summary vs chat)", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "shared-key", "# Summary", null);
+    store.setJson("chat", "shared-key", [{ role: "user", content: "hi" }], null);
+
+    // Delete from chat kind only
+    store.deleteEntry("chat", "shared-key");
+
+    // Summary still exists
+    expect(store.getEntryWithMeta("summary", "shared-key")).not.toBeNull();
+    // Chat is gone
+    expect(store.getEntryWithMeta("chat", "shared-key")).toBeNull();
+
+    store.close();
+  });
+});
+
 describe("e2e: chat history save → reload with different content → fallback load", () => {
   /**
    * Simulates the exact flow that happens in the daemon server:

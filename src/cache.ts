@@ -97,6 +97,7 @@ export type CacheStore = {
     kind: CacheKind,
     key: string,
   ) => { value: string; created_at: number; metadata: CacheMetadata | null } | null;
+  deleteEntry: (kind: CacheKind, key: string) => boolean;
   clear: () => void;
   close: () => void;
   transcriptCache: TranscriptCache;
@@ -605,6 +606,11 @@ export async function createCacheStore({
     };
   };
 
+  const deleteEntry = (kind: CacheKind, key: string): boolean => {
+    const result = stmtDelete.run(kind, key) as { changes: number };
+    return result.changes > 0;
+  };
+
   return {
     getText,
     getJson,
@@ -612,6 +618,7 @@ export async function createCacheStore({
     setJson,
     listEntries,
     getEntryWithMeta,
+    deleteEntry,
     clear,
     close,
     transcriptCache,

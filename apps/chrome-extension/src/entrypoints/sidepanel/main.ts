@@ -43,6 +43,9 @@ import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
 import {
+  detectContentTypeLabel,
+  extractDomain,
+  formatHistoryEntrySize,
   isCurrentEntry,
   resolveCurrentKey,
   shouldMarkFirstAsCurrent,
@@ -217,6 +220,8 @@ const modelRowEl = byId<HTMLDivElement>("modelRow");
 const slidesLayoutEl = byId<HTMLSelectElement>("slidesLayout");
 
 const historyToggleBtn = byId<HTMLButtonElement>("historyToggle");
+const historyCloseBtn = byId<HTMLButtonElement>("historyClose");
+const historySubtitleEl = byId<HTMLSpanElement>("historySubtitle");
 const historyPanelEl = byId<HTMLElement>("historyPanel");
 const historyListEl = byId<HTMLDivElement>("historyList");
 const historyEmptyEl = byId<HTMLDivElement>("historyEmpty");
@@ -228,6 +233,9 @@ const chatMessagesEl = byId<HTMLDivElement>("chatMessages");
 const chatInputEl = byId<HTMLTextAreaElement>("chatInput");
 const chatSendBtn = byId<HTMLButtonElement>("chatSend");
 const chatContextStatusEl = byId<HTMLDivElement>("chatContextStatus");
+const summaryHistoryBannerEl = byId<HTMLDivElement>("summaryHistoryBanner");
+const summaryHistoryBannerTextEl = byId<HTMLSpanElement>("summaryHistoryBannerText");
+const summaryHistoryBannerDismissBtn = byId<HTMLButtonElement>("summaryHistoryBannerDismiss");
 const chatHistoryBannerEl = byId<HTMLDivElement>("chatHistoryBanner");
 const chatHistoryBannerTextEl = byId<HTMLSpanElement>("chatHistoryBannerText");
 const chatHistoryBannerDismissBtn = byId<HTMLButtonElement>("chatHistoryBannerDismiss");
@@ -2565,6 +2573,16 @@ const autoToggle = mountCheckbox(autoToggleRoot, {
   },
 });
 
+function updateChatPlaceholder() {
+  if (loadedChatHistoryKey) {
+    chatInputEl.placeholder = "Continue this saved chat\u2026";
+    return;
+  }
+  const url = panelState.currentSource?.url ?? activeTabUrl;
+  const label = detectContentTypeLabel(url);
+  chatInputEl.placeholder = `Ask about this ${label}\u2026`;
+}
+
 function applyChatEnabled() {
   chatContainerEl.toggleAttribute("hidden", !chatEnabledValue);
   chatDockEl.toggleAttribute("hidden", !chatEnabledValue);
@@ -3859,6 +3877,12 @@ function updateControls(state: UiState) {
     void loadHistory();
   }
 
+  if (tabChanged || urlChanged) {
+    updateChatPlaceholder();
+    summaryHistoryBannerEl.classList.add("hidden");
+    loadedHistoryKey = null;
+  }
+
   autoValue = state.settings.autoSummarize;
   autoToggle.update({
     id: "sidepanel-auto",
@@ -4090,6 +4114,7 @@ function handleBgMessage(msg: BgToPanel) {
       setPhase("connecting");
       lastAction = "summarize";
       loadedHistoryKey = null;
+      summaryHistoryBannerEl.classList.add("hidden");
       window.clearTimeout(autoKickTimer);
       if (panelState.chatStreaming) {
         finishStreamingMessage();
@@ -4271,11 +4296,6 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "\u2026" : s;
 }
 
-function formatChars(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k chars`;
-  return `${n} chars`;
-}
-
 async function getAuthToken(): Promise<string> {
   return (await loadSettings()).token.trim();
 }
@@ -4287,6 +4307,8 @@ async function loadHistory() {
     return;
   }
   const currentUrl = panelState.currentSource?.url ?? activeTabUrl ?? "";
+  const domain = extractDomain(currentUrl);
+  historySubtitleEl.textContent = domain ? `\u00b7 ${domain}` : "";
   const canonical = currentUrl ? canonicalizeUrlForHistory(currentUrl) : "";
   const urlParam = canonical ? `&url=${encodeURIComponent(canonical)}&match=canonical` : "";
   const endpoint =
@@ -4359,7 +4381,7 @@ function renderHistoryList(
       const title = String(meta.title || meta.url || "Unknown");
       const url = String(meta.url || "");
       const model = String(meta.model || "");
-      const chars = (meta.summaryChars as number) || entry.size_bytes;
+      const sizeLabel = formatHistoryEntrySize(historyMode, meta, entry.size_bytes);
       const isCurrent = isCurrentEntry(entry.key, index, currentKey, markFirstAsCurrent);
 
       return `<button class="historyItem${isCurrent ? " isCurrent" : ""}" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
@@ -4367,9 +4389,13 @@ function renderHistoryList(
       <div class="historyItem__meta">
         <span class="historyItem__date">${date}</span>
         ${model ? `<span class="historyItem__model">${escapeHtml(model)}</span>` : ""}
-        ${chars ? `<span class="historyItem__chars">${formatChars(chars)}</span>` : ""}
+        ${sizeLabel ? `<span class="historyItem__chars">${escapeHtml(sizeLabel)}</span>` : ""}
       </div>
       ${url ? `<div class="historyItem__url">${escapeHtml(truncate(url, 50))}</div>` : ""}
+      ${meta.preview ? `<div class="historyItem__preview">${escapeHtml(truncate(String(meta.preview), 100))}</div>` : ""}
+      <button class="historyItem__delete" data-delete-key="${escapeHtml(entry.key)}" data-delete-mode="${historyMode}" aria-label="Delete" title="Delete">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+      </button>
     </button>`;
     })
     .join("");
@@ -4379,6 +4405,34 @@ function renderHistoryList(
       const btn = el as HTMLElement;
       void loadHistoryEntry(btn.dataset.key!, btn.dataset.mode!);
     });
+  }
+  for (const el of Array.from(historyListEl.querySelectorAll(".historyItem__delete"))) {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const btn = el as HTMLElement;
+      void deleteHistoryEntry(btn.dataset.deleteKey!, btn.dataset.deleteMode!);
+    });
+  }
+}
+
+async function deleteHistoryEntry(key: string, mode: string) {
+  const token = await getAuthToken();
+  if (!token) return;
+  const endpoint =
+    mode === "summaries"
+      ? `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(key)}`
+      : `http://127.0.0.1:8787/v1/history/chats/${encodeURIComponent(key)}`;
+  try {
+    const res = await fetch(endpoint, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as { ok?: boolean };
+    if (data.ok) {
+      void loadHistory();
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -4394,13 +4448,11 @@ async function loadHistoryEntry(key: string, mode: string) {
       const data = (await res.json()) as {
         ok?: boolean;
         value?: string;
+        created_at?: number;
         metadata?: Record<string, unknown> | null;
       };
       if (data.ok && data.value) {
         loadedHistoryKey = key;
-        historyOpen = false;
-        historyPanelEl.classList.add("hidden");
-        historyToggleBtn.classList.remove("isActive");
         renderMarkdown(data.value);
         const { title, model } = parseSummaryHistoryMeta(data.metadata);
         headerController.setBaseTitle(title);
@@ -4408,6 +4460,19 @@ async function loadHistoryEntry(key: string, mode: string) {
         panelState.lastMeta = { ...panelState.lastMeta, model };
         updateModelBadge();
         setPhase("idle");
+        const dateStr = data.created_at
+          ? new Date(data.created_at).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "";
+        summaryHistoryBannerTextEl.textContent = `Viewing saved summary${dateStr ? ` \u00b7 ${dateStr}` : ""}`;
+        summaryHistoryBannerEl.classList.remove("hidden");
+        historyOpen = false;
+        historyPanelEl.classList.add("hidden");
+        historyToggleBtn.classList.remove("isActive");
       }
     } catch {
       // ignore
@@ -4449,6 +4514,7 @@ async function loadHistoryEntry(key: string, mode: string) {
           const msgCount = data.metadata?.messageCount ?? parsed.length;
           chatHistoryBannerTextEl.textContent = `Viewing saved chat \u00b7 ${dateStr} \u00b7 ${msgCount} messages`;
           chatHistoryBannerEl.classList.remove("hidden");
+          updateChatPlaceholder();
           void loadHistory();
         }
       }
@@ -4470,6 +4536,23 @@ function toggleHistoryPanel() {
 }
 
 historyToggleBtn.addEventListener("click", () => toggleHistoryPanel());
+historyCloseBtn.addEventListener("click", () => {
+  historyOpen = false;
+  historyPanelEl.classList.add("hidden");
+  historyToggleBtn.classList.remove("isActive");
+});
+
+summaryHistoryBannerDismissBtn.addEventListener("click", () => {
+  loadedHistoryKey = null;
+  summaryHistoryBannerEl.classList.add("hidden");
+  if (activeTabId && activeTabUrl) {
+    const cached = panelCacheController.resolve(activeTabId, activeTabUrl);
+    if (cached) {
+      applyPanelCache(cached, { preserveChat: true });
+    }
+  }
+  if (historyOpen) void loadHistory();
+});
 
 chatHistoryBannerDismissBtn.addEventListener("click", () => {
   loadedChatHistoryKey = null;
@@ -4580,6 +4663,7 @@ function resetChatState() {
   lastNavigationMessageUrl = null;
   loadedChatHistoryKey = null;
   chatHistoryBannerEl.classList.add("hidden");
+  updateChatPlaceholder();
 }
 
 function finishStreamingMessage() {

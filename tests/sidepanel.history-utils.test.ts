@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectContentTypeLabel,
+  extractDomain,
+  formatHistoryEntrySize,
+  generatePreview,
   isCurrentEntry,
   resolveCurrentKey,
   shouldMarkFirstAsCurrent,
@@ -135,5 +139,157 @@ describe("shouldRefreshHistoryOnNavigation", () => {
 
   it("does not refresh when nothing changed and history is closed", () => {
     expect(shouldRefreshHistoryOnNavigation(false, false, false)).toBe(false);
+  });
+});
+
+describe("formatHistoryEntrySize", () => {
+  describe("chats mode", () => {
+    it("shows message count for a single message", () => {
+      expect(formatHistoryEntrySize("chats", { messageCount: 1 }, 500)).toBe("1 message");
+    });
+
+    it("shows message count for multiple messages", () => {
+      expect(formatHistoryEntrySize("chats", { messageCount: 5 }, 2000)).toBe("5 messages");
+    });
+
+    it("returns empty string when messageCount is 0", () => {
+      expect(formatHistoryEntrySize("chats", { messageCount: 0 }, 100)).toBe("");
+    });
+
+    it("returns empty string when messageCount is missing", () => {
+      expect(formatHistoryEntrySize("chats", {}, 100)).toBe("");
+    });
+
+    it("returns empty string when messageCount is not a number", () => {
+      expect(formatHistoryEntrySize("chats", { messageCount: "three" }, 100)).toBe("");
+    });
+  });
+
+  describe("summaries mode", () => {
+    it("uses summaryChars from metadata when available", () => {
+      expect(formatHistoryEntrySize("summaries", { summaryChars: 1500 }, 800)).toBe("1.5k chars");
+    });
+
+    it("falls back to sizeBytes when summaryChars is missing", () => {
+      expect(formatHistoryEntrySize("summaries", {}, 2500)).toBe("2.5k chars");
+    });
+
+    it("shows raw char count for values under 1000", () => {
+      expect(formatHistoryEntrySize("summaries", { summaryChars: 450 }, 450)).toBe("450 chars");
+    });
+
+    it("returns empty string when both summaryChars and sizeBytes are 0", () => {
+      expect(formatHistoryEntrySize("summaries", { summaryChars: 0 }, 0)).toBe("");
+    });
+  });
+});
+
+describe("detectContentTypeLabel", () => {
+  it("returns 'video' for www.youtube.com", () => {
+    expect(detectContentTypeLabel("https://www.youtube.com/watch?v=abc123")).toBe("video");
+  });
+
+  it("returns 'video' for youtube.com without www", () => {
+    expect(detectContentTypeLabel("https://youtube.com/watch?v=abc123")).toBe("video");
+  });
+
+  it("returns 'video' for youtu.be short links", () => {
+    expect(detectContentTypeLabel("https://youtu.be/abc123")).toBe("video");
+  });
+
+  it("returns 'PDF' for .pdf URLs", () => {
+    expect(detectContentTypeLabel("https://example.com/paper.pdf")).toBe("PDF");
+  });
+
+  it("returns 'page' for regular URLs", () => {
+    expect(detectContentTypeLabel("https://example.com/article")).toBe("page");
+  });
+
+  it("returns 'page' for null", () => {
+    expect(detectContentTypeLabel(null)).toBe("page");
+  });
+
+  it("returns 'page' for undefined", () => {
+    expect(detectContentTypeLabel(undefined)).toBe("page");
+  });
+
+  it("returns 'page' for invalid URLs", () => {
+    expect(detectContentTypeLabel("not a url")).toBe("page");
+  });
+});
+
+describe("extractDomain", () => {
+  it("extracts hostname from a URL", () => {
+    expect(extractDomain("https://example.com/page")).toBe("example.com");
+  });
+
+  it("strips www prefix", () => {
+    expect(extractDomain("https://www.youtube.com/watch?v=abc")).toBe("youtube.com");
+  });
+
+  it("preserves subdomains other than www", () => {
+    expect(extractDomain("https://docs.google.com/doc/123")).toBe("docs.google.com");
+  });
+
+  it("returns empty string for null", () => {
+    expect(extractDomain(null)).toBe("");
+  });
+
+  it("returns empty string for undefined", () => {
+    expect(extractDomain(undefined)).toBe("");
+  });
+
+  it("returns empty string for invalid URLs", () => {
+    expect(extractDomain("not-a-url")).toBe("");
+  });
+});
+
+describe("generatePreview", () => {
+  it("strips markdown headings", () => {
+    expect(generatePreview("## Summary\nSome text")).toBe("Summary Some text");
+  });
+
+  it("strips bold markers", () => {
+    expect(generatePreview("This is **bold** text")).toBe("This is bold text");
+  });
+
+  it("strips italic markers", () => {
+    expect(generatePreview("This is *italic* text")).toBe("This is italic text");
+  });
+
+  it("strips inline code backticks", () => {
+    expect(generatePreview("Use `console.log` here")).toBe("Use console.log here");
+  });
+
+  it("strips markdown links, keeping text", () => {
+    expect(generatePreview("See [the docs](https://example.com)")).toBe("See the docs");
+  });
+
+  it("strips list markers", () => {
+    expect(generatePreview("- item one\n- item two")).toBe("item one item two");
+  });
+
+  it("strips numbered list markers", () => {
+    expect(generatePreview("1. first\n2. second")).toBe("first second");
+  });
+
+  it("truncates long text with ellipsis", () => {
+    const long = "A".repeat(200);
+    const result = generatePreview(long, 120);
+    expect(result).toHaveLength(121); // 120 chars + ellipsis
+    expect(result.endsWith("\u2026")).toBe(true);
+  });
+
+  it("does not truncate short text", () => {
+    expect(generatePreview("Short text")).toBe("Short text");
+  });
+
+  it("collapses multiple whitespace", () => {
+    expect(generatePreview("a   b\n\nc")).toBe("a b c");
+  });
+
+  it("respects custom maxLength", () => {
+    const result = generatePreview("Hello World", 5);
+    expect(result).toBe("Hello\u2026");
   });
 });

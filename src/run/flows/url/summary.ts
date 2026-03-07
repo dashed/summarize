@@ -1172,6 +1172,7 @@ export async function summarizeExtractedUrl({
       title: extracted.title ?? null,
       siteName: extracted.siteName ?? null,
       summaryChars: summaryResult.summary.length,
+      preview: summaryResult.summary.replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\n+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120),
       prompt,
       systemPrompt: SUMMARY_SYSTEM_PROMPT,
       contentChars: extracted.content.length,

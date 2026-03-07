@@ -1682,6 +1682,17 @@ export async function runDaemonServer({
         json(res, 200, { ok: true, ...entry }, cors);
         return;
       }
+      if (req.method === "DELETE" && summaryKeyMatch) {
+        const key = decodeURIComponent(summaryKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const deleted = store.deleteEntry("summary", key);
+        json(res, deleted ? 200 : 404, { ok: deleted }, cors);
+        return;
+      }
 
       if (req.method === "POST" && pathname === "/v1/agent/history") {
         const body = await readJsonBody(req, 1_000_000);
@@ -1764,12 +1775,19 @@ export async function runDaemonServer({
           pageContent: typeof pageContent === "string" ? pageContent : null,
           cacheContent: typeof cacheContent === "string" ? cacheContent : null,
         });
+        const lastUserMsg = [...messages].reverse().find(
+          (m: Record<string, unknown>) => m.role === "user" && typeof m.content === "string",
+        );
+        const preview = typeof lastUserMsg?.content === "string"
+          ? (lastUserMsg.content as string).slice(0, 120)
+          : null;
         const metadata = {
           url: String(bodyUrl),
           historyUrl: buildHistoryUrlMetadata(String(bodyUrl)),
           title: title ?? null,
           model: model ?? null,
           messageCount: messages.length,
+          preview,
         };
         store.setJson("chat", key, messages, cacheState.ttlMs, metadata);
         json(res, 200, { ok: true }, cors);
@@ -1805,6 +1823,17 @@ export async function runDaemonServer({
           return;
         }
         json(res, 200, { ok: true, ...entry }, cors);
+        return;
+      }
+      if (req.method === "DELETE" && chatKeyMatch) {
+        const key = decodeURIComponent(chatKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const deleted = store.deleteEntry("chat", key);
+        json(res, deleted ? 200 : 404, { ok: deleted }, cors);
         return;
       }
 
