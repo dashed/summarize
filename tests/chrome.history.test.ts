@@ -26,15 +26,29 @@ describe("canonicalizeUrlForHistory", () => {
     );
   });
 
-  it("strips query and hash for non-YouTube URLs", () => {
-    expect(
-      canonicalizeUrlForHistory("https://example.com/article/foo?ref=twitter#section-2"),
-    ).toBe("https://example.com/article/foo");
+  it("preserves semantically meaningful query params for non-YouTube URLs", () => {
+    expect(canonicalizeUrlForHistory("https://example.com/article/foo?ref=twitter#section-2")).toBe(
+      "https://example.com/article/foo?ref=twitter",
+    );
   });
 
   it("keeps origin + pathname for non-YouTube", () => {
     expect(canonicalizeUrlForHistory("https://blog.example.com/posts/123")).toBe(
       "https://blog.example.com/posts/123",
+    );
+  });
+
+  it("strips tracking params while keeping meaningful query params", () => {
+    expect(
+      canonicalizeUrlForHistory(
+        "https://example.com/article?utm_source=newsletter&id=1&fbclid=abc#section-2",
+      ),
+    ).toBe("https://example.com/article?id=1");
+  });
+
+  it("treats sibling query URLs as different canonical history keys", () => {
+    expect(canonicalizeUrlForHistory("https://example.com/article?id=1")).not.toBe(
+      canonicalizeUrlForHistory("https://example.com/article?id=2"),
     );
   });
 
@@ -52,22 +66,26 @@ describe("canonicalizeUrlForHistory", () => {
   });
 
   it("strips query from PDF URLs", () => {
-    expect(
-      canonicalizeUrlForHistory("https://arxiv.org/pdf/2301.12345.pdf?download=true"),
-    ).toBe("https://arxiv.org/pdf/2301.12345.pdf");
+    expect(canonicalizeUrlForHistory("https://arxiv.org/pdf/2301.12345.pdf?download=true")).toBe(
+      "https://arxiv.org/pdf/2301.12345.pdf",
+    );
   });
 
   it("handles YouTube with only v= param (no extras to strip)", () => {
-    expect(
-      canonicalizeUrlForHistory("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
-    ).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    expect(canonicalizeUrlForHistory("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toBe(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
   });
 });
 
 describe("parseSummaryHistoryMeta", () => {
   it("extracts title and model from metadata", () => {
     expect(
-      parseSummaryHistoryMeta({ title: "My Article", model: "google/gemini-3-flash", url: "https://example.com" }),
+      parseSummaryHistoryMeta({
+        title: "My Article",
+        model: "google/gemini-3-flash",
+        url: "https://example.com",
+      }),
     ).toEqual({ title: "My Article", model: "google/gemini-3-flash" });
   });
 
@@ -131,6 +149,10 @@ describe("isSpecificEnoughForHistoryLookup", () => {
   it("accepts non-YouTube URLs with meaningful path", () => {
     expect(isSpecificEnoughForHistoryLookup("https://example.com/article/foo")).toBe(true);
     expect(isSpecificEnoughForHistoryLookup("https://arxiv.org/pdf/2301.12345.pdf")).toBe(true);
+  });
+
+  it("accepts non-YouTube URLs with meaningful query params", () => {
+    expect(isSpecificEnoughForHistoryLookup("https://example.com/?id=1")).toBe(true);
   });
 
   it("rejects bare domain URLs", () => {

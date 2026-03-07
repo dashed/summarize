@@ -13,7 +13,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createCacheStore, hashString } from "../src/cache.js";
+import { createCacheStore } from "../src/cache.js";
+import { buildChatHistoryKey } from "../src/daemon/history.js";
 
 function makeTempStore(maxBytes = 1024 * 1024) {
   const root = mkdtempSync(join(tmpdir(), "summarize-daemon-history-"));
@@ -21,9 +22,18 @@ function makeTempStore(maxBytes = 1024 * 1024) {
   return createCacheStore({ path, maxBytes });
 }
 
-/** Mirrors the chat key construction in server.ts */
-function buildChatKey(url: string, automationEnabled: boolean): string {
-  return hashString(JSON.stringify({ url, automationEnabled }));
+function buildChatKey({
+  url,
+  automationEnabled,
+  cacheContent,
+  pageContent,
+}: {
+  url: string;
+  automationEnabled: boolean;
+  cacheContent?: string | null;
+  pageContent?: string | null;
+}): string {
+  return buildChatHistoryKey({ url, automationEnabled, cacheContent, pageContent });
 }
 
 describe("GET /v1/history/summaries (cache layer)", () => {
@@ -127,7 +137,11 @@ describe("POST /v1/agent/history (chat load, cache layer)", () => {
 
     const url = "https://example.com/page";
     const automationEnabled = true;
-    const key = buildChatKey(url, automationEnabled);
+    const key = buildChatKey({
+      url,
+      automationEnabled,
+      cacheContent: "Page body v1",
+    });
     const messages = [
       { role: "user", content: "What is this page about?" },
       { role: "assistant", content: "This page is about testing." },
@@ -144,7 +158,11 @@ describe("POST /v1/agent/history (chat load, cache layer)", () => {
   it("returns null for missing chat (empty messages in API)", async () => {
     const store = await makeTempStore();
 
-    const key = buildChatKey("https://not-saved.com", false);
+    const key = buildChatKey({
+      url: "https://not-saved.com",
+      automationEnabled: false,
+      cacheContent: "missing",
+    });
     const loaded = store.getJson<unknown[]>("chat", key);
     expect(loaded).toBeNull();
 
@@ -155,8 +173,16 @@ describe("POST /v1/agent/history (chat load, cache layer)", () => {
     const store = await makeTempStore();
 
     const url = "https://example.com/page";
-    const keyEnabled = buildChatKey(url, true);
-    const keyDisabled = buildChatKey(url, false);
+    const keyEnabled = buildChatKey({
+      url,
+      automationEnabled: true,
+      cacheContent: "same content",
+    });
+    const keyDisabled = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "same content",
+    });
     expect(keyEnabled).not.toBe(keyDisabled);
 
     store.setJson("chat", keyEnabled, [{ role: "user", content: "auto-on" }], null);
@@ -169,6 +195,22 @@ describe("POST /v1/agent/history (chat load, cache layer)", () => {
 
     store.close();
   });
+
+  it("produces different keys for the same URL when page content differs", () => {
+    const url = "https://example.com/page";
+    const first = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "first revision",
+    });
+    const second = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "second revision",
+    });
+
+    expect(first).not.toBe(second);
+  });
 });
 
 describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
@@ -177,13 +219,18 @@ describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
 
     const url = "https://example.com/article";
     const automationEnabled = false;
-    const key = buildChatKey(url, automationEnabled);
+    const key = buildChatKey({
+      url,
+      automationEnabled,
+      cacheContent: "Article body",
+    });
     const messages = [
       { role: "user", content: "Summarize this" },
       { role: "assistant", content: "Here is a summary..." },
     ];
     const metadata = {
       url,
+      historyUrl: url,
       title: "Test Article",
       model: "openai/gpt-4o",
       messageCount: messages.length,
@@ -208,11 +255,16 @@ describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
     const store = await makeTempStore();
 
     const url = "https://example.com/page";
-    const key = buildChatKey(url, false);
+    const key = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "stable page body",
+    });
 
     // First save
     store.setJson("chat", key, [{ role: "user", content: "first" }], null, {
       url,
+      historyUrl: url,
       title: null,
       model: null,
       messageCount: 1,
@@ -226,6 +278,7 @@ describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
     ];
     store.setJson("chat", key, updated, null, {
       url,
+      historyUrl: url,
       title: "Updated Page",
       model: "openai/gpt-4o",
       messageCount: 3,
@@ -240,6 +293,78 @@ describe("POST /v1/agent/history/save (chat save, cache layer)", () => {
 
     store.close();
   });
+
+  it("does not overwrite chat history when the URL is unchanged but the page fingerprint differs", async () => {
+    const store = await makeTempStore();
+
+    const url = "https://example.com/page";
+    const firstKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "first revision",
+    });
+    const secondKey = buildChatKey({
+      url,
+      automationEnabled: false,
+      cacheContent: "second revision",
+    });
+    expect(firstKey).not.toBe(secondKey);
+
+    store.setJson("chat", firstKey, [{ role: "assistant", content: "first response" }], null, {
+      url,
+      historyUrl: url,
+      title: "Page",
+      model: "openai/gpt-4o",
+      messageCount: 1,
+    });
+    store.setJson("chat", secondKey, [{ role: "assistant", content: "second response" }], null, {
+      url,
+      historyUrl: url,
+      title: "Page",
+      model: "openai/gpt-4o",
+      messageCount: 1,
+    });
+
+    expect(store.getJson<Array<{ content: string }>>("chat", firstKey)?.[0]?.content).toBe(
+      "first response",
+    );
+    expect(store.getJson<Array<{ content: string }>>("chat", secondKey)?.[0]?.content).toBe(
+      "second response",
+    );
+
+    store.close();
+  });
+
+  it("load and save use the same richer key inputs", async () => {
+    const store = await makeTempStore();
+
+    const key = buildChatKey({
+      url: "https://example.com/page?id=1&utm_source=mail",
+      automationEnabled: true,
+      cacheContent: "Canonical body",
+    });
+    const messages = [{ role: "assistant", content: "reloaded" }];
+
+    store.setJson("chat", key, messages, null, {
+      url: "https://example.com/page?id=1&utm_source=mail",
+      historyUrl: "https://example.com/page?id=1",
+      title: "Page",
+      model: "openai/gpt-4o",
+      messageCount: 1,
+    });
+
+    const loaded = store.getJson<typeof messages>(
+      "chat",
+      buildChatKey({
+        url: "https://example.com/page?id=1",
+        automationEnabled: true,
+        cacheContent: "Canonical body",
+      }),
+    );
+    expect(loaded).toEqual(messages);
+
+    store.close();
+  });
 });
 
 describe("GET /v1/history/chats (cache layer)", () => {
@@ -248,8 +373,8 @@ describe("GET /v1/history/chats (cache layer)", () => {
 
     const url1 = "https://site.com/a";
     const url2 = "https://site.com/b";
-    const key1 = buildChatKey(url1, false);
-    const key2 = buildChatKey(url2, true);
+    const key1 = buildChatKey({ url: url1, automationEnabled: false, cacheContent: "A" });
+    const key2 = buildChatKey({ url: url2, automationEnabled: true, cacheContent: "B" });
 
     store.setJson("chat", key1, [{ role: "user", content: "hello" }], null, {
       url: url1,

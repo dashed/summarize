@@ -1,8 +1,8 @@
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
 import { extractYouTubeVideoId, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { SUMMARY_LENGTH_SPECS } from "@steipete/summarize-core/prompts";
-import MarkdownIt from "markdown-it";
 import katexPlugin from "@traptitech/markdown-it-katex";
+import MarkdownIt from "markdown-it";
 import "katex/dist/katex.min.css";
 import type { SummaryLength } from "../../../../../src/shared/contracts.js";
 import type { ChatMessage, PanelPhase, PanelState, RunStart, UiState } from "./types";
@@ -21,7 +21,11 @@ import { listSkills } from "../../automation/skills-store";
 import { executeToolCall, getAutomationToolNames } from "../../automation/tools";
 import { readPresetOrCustomValue } from "../../lib/combo";
 import { buildIdleSubtitle, formatModelBadge } from "../../lib/header";
-import { canonicalizeUrlForHistory, isSpecificEnoughForHistoryLookup, parseSummaryHistoryMeta } from "../../lib/history";
+import {
+  canonicalizeUrlForHistory,
+  isSpecificEnoughForHistoryLookup,
+  parseSummaryHistoryMeta,
+} from "../../lib/history";
 import { buildMetricsParts, buildMetricsTokens } from "../../lib/metrics";
 import {
   defaultSettings,
@@ -34,6 +38,7 @@ import { applyTheme } from "../../lib/theme";
 import { generateToken } from "../../lib/token";
 import { mountCheckbox } from "../../ui/zag-checkbox";
 import { ChatController } from "./chat-controller";
+import { buildChatHistoryStorageKey } from "./chat-history-store";
 import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
@@ -66,6 +71,12 @@ type PanelToBg =
       type: "panel:chat-history";
       requestId: string;
       summary?: string | null;
+    }
+  | {
+      type: "panel:save-chat-history";
+      messages: Message[];
+      summary?: string | null;
+      model?: string | null;
     }
   | { type: "panel:seek"; seconds: number }
   | { type: "panel:ping" }
@@ -288,7 +299,7 @@ type ChatQueueItem = {
   createdAt: number;
 };
 let chatQueue: ChatQueueItem[] = [];
-const chatHistoryCache = new Map<number, ChatMessage[]>();
+const chatHistoryCache = new Map<string, ChatMessage[]>();
 let chatHistoryLoadId = 0;
 let activeTabId: number | null = null;
 let activeTabUrl: string | null = null;
@@ -1013,15 +1024,21 @@ function shouldPreserveChatForRun(url: string) {
   return isRecentAgentNavigation(null, url);
 }
 
-async function migrateChatHistory(fromTabId: number | null, toTabId: number | null) {
-  if (!fromTabId || !toTabId || fromTabId === toTabId) return;
+async function migrateChatHistory(
+  fromTabId: number | null,
+  toTabId: number | null,
+  url: string | null,
+) {
+  if (!fromTabId || !toTabId || !url) return;
   const messages = chatController.getMessages();
   if (messages.length === 0) return;
-  chatHistoryCache.set(toTabId, messages);
+  const key = getChatHistoryKey(toTabId, url);
+  if (!key) return;
+  chatHistoryCache.set(key, messages);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.set({ [getChatHistoryKey(toTabId)]: messages });
+    await store.set({ [key]: messages });
   } catch {
     // ignore
   }
@@ -2554,8 +2571,17 @@ function applyChatEnabled() {
   }
 }
 
-function getChatHistoryKey(tabId: number) {
-  return `chat:tab:${tabId}`;
+function getChatHistoryKey(tabId: number, url: string | null | undefined) {
+  if (!url) return null;
+  return buildChatHistoryStorageKey(tabId, url);
+}
+
+function getCurrentChatHistoryUrl() {
+  const sourceUrl = panelState.currentSource?.url ?? null;
+  if (activeTabUrl && sourceUrl && !urlsMatch(sourceUrl, activeTabUrl)) {
+    return activeTabUrl;
+  }
+  return sourceUrl ?? activeTabUrl;
 }
 
 function buildEmptyUsage() {
@@ -2621,29 +2647,35 @@ function normalizeStoredMessage(raw: Record<string, unknown>): ChatMessage | nul
   return null;
 }
 
-async function clearChatHistoryForTab(tabId: number | null) {
+async function clearChatHistoryForTab(tabId: number | null, url: string | null | undefined) {
   if (!tabId) return;
-  chatHistoryCache.delete(tabId);
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return;
+  chatHistoryCache.delete(key);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.remove(getChatHistoryKey(tabId));
+    await store.remove(key);
   } catch {
     // ignore
   }
 }
 
 async function clearChatHistoryForActiveTab() {
-  await clearChatHistoryForTab(activeTabId);
+  await clearChatHistoryForTab(activeTabId, getCurrentChatHistoryUrl());
 }
 
-async function loadChatHistory(tabId: number): Promise<ChatMessage[] | null> {
-  const cached = chatHistoryCache.get(tabId);
+async function loadChatHistory(
+  tabId: number,
+  url: string | null | undefined,
+): Promise<ChatMessage[] | null> {
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return null;
+  const cached = chatHistoryCache.get(key);
   if (cached) return cached;
   const store = chrome.storage?.session;
   if (!store) return null;
   try {
-    const key = getChatHistoryKey(tabId);
     const res = await store.get(key);
     const raw = res?.[key];
     if (!Array.isArray(raw)) return null;
@@ -2652,7 +2684,7 @@ async function loadChatHistory(tabId: number): Promise<ChatMessage[] | null> {
       .map((msg) => normalizeStoredMessage(msg as Record<string, unknown>))
       .filter((msg): msg is ChatMessage => Boolean(msg));
     if (!parsed.length) return null;
-    chatHistoryCache.set(tabId, parsed);
+    chatHistoryCache.set(key, parsed);
     return parsed;
   } catch {
     return null;
@@ -2663,50 +2695,39 @@ async function persistChatHistory() {
   if (!chatEnabledValue) return;
   const tabId = activeTabId;
   if (!tabId) return;
+  const url = getCurrentChatHistoryUrl();
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return;
   const compacted = compactChatHistory(chatController.getMessages(), chatLimits);
   if (compacted.length !== chatController.getMessages().length) {
     chatController.setMessages(compacted, { scroll: false });
   }
-  chatHistoryCache.set(tabId, compacted);
+  chatHistoryCache.set(key, compacted);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.set({ [getChatHistoryKey(tabId)]: compacted });
+    await store.set({ [key]: compacted });
   } catch {
     // ignore
   }
 
-  // Also persist to daemon SQLite for cross-session persistence
-  try {
-    const token = await getAuthToken();
-    const url = panelState.currentSource?.url ?? activeTabUrl;
-    if (token && url && compacted.length > 0) {
-      fetch("http://127.0.0.1:8787/v1/agent/history/save", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          url,
-          title: panelState.currentSource?.title ?? null,
-          automationEnabled: automationEnabledValue,
-          messages: compacted,
-          model: panelState.lastMeta?.model ?? null,
-        }),
-      }).catch(() => {}); // Fire-and-forget
-    }
-  } catch {
-    // ignore
+  if (compacted.length > 0) {
+    void send({
+      type: "panel:save-chat-history",
+      messages: compacted,
+      summary: panelState.summaryMarkdown,
+      model: panelState.lastMeta?.model ?? null,
+    });
   }
 }
 
 async function restoreChatHistory() {
   const tabId = activeTabId;
   if (!tabId) return;
+  const url = getCurrentChatHistoryUrl();
   chatHistoryLoadId += 1;
   const loadId = chatHistoryLoadId;
-  const history = await loadChatHistory(tabId);
+  const history = await loadChatHistory(tabId, url);
   if (loadId !== chatHistoryLoadId) return;
   if (history?.length) {
     const compacted = compactChatHistory(history, chatLimits);
@@ -2748,33 +2769,59 @@ async function restoreChatHistory() {
 let summaryRestoreLoadId = 0;
 
 async function restoreSummaryFromHistory(url: string) {
-  console.log("[restoreSummary] called for:", url, "existing summary:", !!panelState.summaryMarkdown);
+  console.log(
+    "[restoreSummary] called for:",
+    url,
+    "existing summary:",
+    !!panelState.summaryMarkdown,
+  );
   if (panelState.summaryMarkdown) return;
   summaryRestoreLoadId += 1;
   const loadId = summaryRestoreLoadId;
   try {
     const token = await getAuthToken();
-    if (!token) { console.log("[restoreSummary] no token"); return; }
+    if (!token) {
+      console.log("[restoreSummary] no token");
+      return;
+    }
     const canonical = canonicalizeUrlForHistory(url);
-    if (!canonical) { console.log("[restoreSummary] no canonical url"); return; }
+    if (!canonical) {
+      console.log("[restoreSummary] no canonical url");
+      return;
+    }
     if (!isSpecificEnoughForHistoryLookup(canonical)) {
-      console.log("[restoreSummary] URL too broad for prefix match, skipping:", canonical);
+      console.log("[restoreSummary] URL too broad for history lookup, skipping:", canonical);
       return;
     }
     console.log("[restoreSummary] fetching list for canonical:", canonical);
     const listRes = await fetch(
-      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&limit=1`,
+      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&match=canonical&limit=1`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     const listData = (await listRes.json()) as {
       ok?: boolean;
       summaries?: Array<{ key: string; metadata: Record<string, unknown> | null }>;
     };
-    console.log("[restoreSummary] list response:", { ok: listData.ok, count: listData.summaries?.length });
-    if (loadId !== summaryRestoreLoadId) { console.log("[restoreSummary] stale loadId"); return; }
-    if (!listData.ok || !listData.summaries?.length) { console.log("[restoreSummary] no summaries found"); return; }
-    if (panelState.summaryMarkdown) { console.log("[restoreSummary] summary already set"); return; }
-    if (activeTabUrl !== url) { console.log("[restoreSummary] url changed:", activeTabUrl, "!==", url); return; }
+    console.log("[restoreSummary] list response:", {
+      ok: listData.ok,
+      count: listData.summaries?.length,
+    });
+    if (loadId !== summaryRestoreLoadId) {
+      console.log("[restoreSummary] stale loadId");
+      return;
+    }
+    if (!listData.ok || !listData.summaries?.length) {
+      console.log("[restoreSummary] no summaries found");
+      return;
+    }
+    if (panelState.summaryMarkdown) {
+      console.log("[restoreSummary] summary already set");
+      return;
+    }
+    if (activeTabUrl !== url) {
+      console.log("[restoreSummary] url changed:", activeTabUrl, "!==", url);
+      return;
+    }
     const entry = listData.summaries[0];
     console.log("[restoreSummary] fetching detail for key:", entry.key);
     const detailRes = await fetch(
@@ -2786,11 +2833,27 @@ async function restoreSummaryFromHistory(url: string) {
       value?: string;
       metadata?: Record<string, unknown> | null;
     };
-    console.log("[restoreSummary] detail response:", { ok: detailData.ok, hasValue: !!detailData.value, valueLen: detailData.value?.length });
-    if (loadId !== summaryRestoreLoadId) { console.log("[restoreSummary] stale loadId (2)"); return; }
-    if (!detailData.ok || !detailData.value) { console.log("[restoreSummary] no value in detail"); return; }
-    if (panelState.summaryMarkdown) { console.log("[restoreSummary] summary already set (2)"); return; }
-    if (activeTabUrl !== url) { console.log("[restoreSummary] url changed (2)"); return; }
+    console.log("[restoreSummary] detail response:", {
+      ok: detailData.ok,
+      hasValue: !!detailData.value,
+      valueLen: detailData.value?.length,
+    });
+    if (loadId !== summaryRestoreLoadId) {
+      console.log("[restoreSummary] stale loadId (2)");
+      return;
+    }
+    if (!detailData.ok || !detailData.value) {
+      console.log("[restoreSummary] no value in detail");
+      return;
+    }
+    if (panelState.summaryMarkdown) {
+      console.log("[restoreSummary] summary already set (2)");
+      return;
+    }
+    if (activeTabUrl !== url) {
+      console.log("[restoreSummary] url changed (2)");
+      return;
+    }
     console.log("[restoreSummary] rendering summary, length:", detailData.value.length);
     renderMarkdown(detailData.value);
     const { title, model } = parseSummaryHistoryMeta(detailData.metadata ?? entry.metadata);
@@ -3702,16 +3765,20 @@ function updateControls(state: UiState) {
       requestAgentAbort("Tab changed");
     }
     if (!preserveChat) {
-      void clearChatHistoryForActiveTab();
       resetChatState();
     } else {
-      void migrateChatHistory(previousTabId, nextTabId);
+      void migrateChatHistory(previousTabId, nextTabId, nextTabUrl);
     }
     inputMode = preferUrlMode ? "video" : "page";
     inputModeOverride = null;
     if (nextTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(nextTabId, nextTabUrl);
-      console.log("[tabSwitch] resolve:", { nextTabId, nextTabUrl, hasCached: !!cached, hasSummary: !!cached?.summaryMarkdown });
+      console.log("[tabSwitch] resolve:", {
+        nextTabId,
+        nextTabUrl,
+        hasCached: !!cached,
+        hasSummary: !!cached?.summaryMarkdown,
+      });
       if (cached) {
         panelCacheController.syncNow();
         streamController.abort();
@@ -3738,11 +3805,11 @@ function updateControls(state: UiState) {
     const preserveChat = initialUrlHydration || isRecentAgentNavigation(activeTabId, nextTabUrl);
     if (preserveChat) {
       notePreserveChatForUrl(nextTabUrl);
+      void migrateChatHistory(activeTabId, activeTabId, nextTabUrl);
     } else if (
       chatEnabledValue &&
       (panelState.chatStreaming || chatController.getMessages().length > 0)
     ) {
-      void clearChatHistoryForActiveTab();
       resetChatState();
     }
     if (activeTabId && nextTabUrl) {
@@ -3970,10 +4037,25 @@ function handleBgMessage(msg: BgToPanel) {
     }
     case "ui:cache": {
       const result = panelCacheController.consumeResponse(msg);
-      console.log("[ui:cache] consumeResponse:", result ? { tabId: result.tabId, url: result.url, hasCache: !!result.cache, hasSummary: !!result.cache?.summaryMarkdown } : null);
+      console.log(
+        "[ui:cache] consumeResponse:",
+        result
+          ? {
+              tabId: result.tabId,
+              url: result.url,
+              hasCache: !!result.cache,
+              hasSummary: !!result.cache?.summaryMarkdown,
+            }
+          : null,
+      );
       if (!result) return;
       if (activeTabId !== result.tabId || activeTabUrl !== result.url) {
-        console.log("[ui:cache] tab/url mismatch, activeTabId:", activeTabId, "activeTabUrl:", activeTabUrl);
+        console.log(
+          "[ui:cache] tab/url mismatch, activeTabId:",
+          activeTabId,
+          "activeTabUrl:",
+          activeTabUrl,
+        );
         return;
       }
       if (!result.cache) {
@@ -3983,7 +4065,10 @@ function handleBgMessage(msg: BgToPanel) {
         void restoreSummaryFromHistory(result.url);
         return;
       }
-      console.log("[ui:cache] applying panel cache, summaryMarkdown length:", result.cache.summaryMarkdown?.length ?? 0);
+      console.log(
+        "[ui:cache] applying panel cache, summaryMarkdown length:",
+        result.cache.summaryMarkdown?.length ?? 0,
+      );
       applyPanelCache(result.cache, { preserveChat: result.preserveChat });
       return;
     }
@@ -4190,7 +4275,7 @@ async function loadHistory() {
   }
   const currentUrl = panelState.currentSource?.url ?? activeTabUrl ?? "";
   const canonical = currentUrl ? canonicalizeUrlForHistory(currentUrl) : "";
-  const urlParam = canonical ? `&url=${encodeURIComponent(canonical)}` : "";
+  const urlParam = canonical ? `&url=${encodeURIComponent(canonical)}&match=canonical` : "";
   const endpoint =
     historyMode === "summaries"
       ? `http://127.0.0.1:8787/v1/history/summaries?limit=50${urlParam}`

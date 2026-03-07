@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, sep as pathSep, resolve as resolvePath } fro
 import type { TranscriptCache, TranscriptSource } from "./content/index.js";
 import type { LengthArg } from "./flags.js";
 import type { OutputLanguage } from "./language.js";
+import { buildHistoryUrlMetadata } from "./shared/history.js";
 
 export type CacheKind = "extract" | "summary" | "transcript" | "chat" | "slides";
 
@@ -84,7 +85,13 @@ export type CacheStore = {
   ) => void;
   listEntries: (
     kind: CacheKind,
-    opts?: { limit?: number; offset?: number; order?: "asc" | "desc"; filterUrl?: string },
+    opts?: {
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+      filterUrl?: string;
+      filterMode?: "prefix" | "canonical";
+    },
   ) => CacheEntryInfo[];
   getEntryWithMeta: (
     kind: CacheKind,
@@ -295,11 +302,39 @@ export async function createCacheStore({
     ORDER BY created_at ASC
     LIMIT ? OFFSET ?
   `);
+  const stmtListByUrlPrefix = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND COALESCE(json_extract(metadata, '$.historyUrl'), json_extract(metadata, '$.url')) LIKE ? || '%'
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrlPrefixAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND COALESCE(json_extract(metadata, '$.historyUrl'), json_extract(metadata, '$.url')) LIKE ? || '%'
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
   const stmtListByUrl = db.prepare(`
     SELECT key, created_at, last_accessed_at, size_bytes, metadata
     FROM cache_entries
     WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
-      AND json_extract(metadata, '$.url') LIKE ? || '%'
+      AND (
+        json_extract(metadata, '$.historyUrl') = ?
+        OR (
+          json_extract(metadata, '$.historyUrl') IS NULL
+          AND (
+            json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') LIKE ? || '?%'
+            OR json_extract(metadata, '$.url') LIKE ? || '&%'
+            OR json_extract(metadata, '$.url') LIKE ? || '#%'
+          )
+        )
+      )
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `);
@@ -307,7 +342,19 @@ export async function createCacheStore({
     SELECT key, created_at, last_accessed_at, size_bytes, metadata
     FROM cache_entries
     WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
-      AND json_extract(metadata, '$.url') LIKE ? || '%'
+      AND (
+        json_extract(metadata, '$.historyUrl') = ?
+        OR (
+          json_extract(metadata, '$.historyUrl') IS NULL
+          AND (
+            json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') LIKE ? || '?%'
+            OR json_extract(metadata, '$.url') LIKE ? || '&%'
+            OR json_extract(metadata, '$.url') LIKE ? || '#%'
+          )
+        )
+      )
     ORDER BY created_at ASC
     LIMIT ? OFFSET ?
   `);
@@ -488,7 +535,13 @@ export async function createCacheStore({
 
   const listEntries = (
     kind: CacheKind,
-    opts?: { limit?: number; offset?: number; order?: "asc" | "desc"; filterUrl?: string },
+    opts?: {
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+      filterUrl?: string;
+      filterMode?: "prefix" | "canonical";
+    },
   ): CacheEntryInfo[] => {
     const now = Date.now();
     const limit = opts?.limit ?? 100;
@@ -502,8 +555,25 @@ export async function createCacheStore({
       metadata: string | null;
     }>;
     if (filterUrl) {
-      const stmt = opts?.order === "asc" ? stmtListByUrlAsc : stmtListByUrl;
-      rows = stmt.all(kind, now, filterUrl, limit, offset) as typeof rows;
+      if (opts?.filterMode === "canonical") {
+        const stmt = opts?.order === "asc" ? stmtListByUrlAsc : stmtListByUrl;
+        const canonicalFilterUrl = buildHistoryUrlMetadata(filterUrl) ?? filterUrl;
+        rows = stmt.all(
+          kind,
+          now,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          filterUrl,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          limit,
+          offset,
+        ) as typeof rows;
+      } else {
+        const stmt = opts?.order === "asc" ? stmtListByUrlPrefixAsc : stmtListByUrlPrefix;
+        rows = stmt.all(kind, now, filterUrl, limit, offset) as typeof rows;
+      }
     } else {
       const stmt = opts?.order === "asc" ? stmtListAsc : stmtList;
       rows = stmt.all(kind, now, limit, offset) as typeof rows;

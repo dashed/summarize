@@ -38,6 +38,7 @@
     "build:cli": "node scripts/build-cli.mjs",
     "build:lib": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm test:coverage",
+    "check:extension": "pnpm -C apps/chrome-extension lint",
     "clean": "rimraf dist packages/core/dist",
     "docs:list": "tsx scripts/docs-list.ts",
     "format": "oxfmt --write",

@@ -1,16 +1,13 @@
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 import { shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { defineBackground } from "wxt/utils/define-background";
+import type { NativeInputPayload, NativeInputResponse } from "../automation/user-script-requests";
 import { parseSseEvent, type SseSlidesData } from "../../../../src/shared/sse-events.js";
 import {
   handleArtifactsRequest,
   handleNativeInputRequest,
   isArtifactsRequest,
   isNativeInputRequest,
-} from "../automation/user-script-requests";
-import type {
-  NativeInputPayload,
-  NativeInputResponse,
 } from "../automation/user-script-requests";
 import { readAgentResponse } from "../lib/agent-response";
 import { buildChatPageContent } from "../lib/chat-context";
@@ -36,6 +33,12 @@ type PanelToBg =
       type: "panel:chat-history";
       requestId: string;
       summary?: string | null;
+    }
+  | {
+      type: "panel:save-chat-history";
+      messages: Message[];
+      summary?: string | null;
+      model?: string | null;
     }
   | { type: "panel:seek"; seconds: number }
   | { type: "panel:ping" }
@@ -2069,6 +2072,93 @@ export default defineBackground(() => {
               ok: false,
               error: message,
             });
+          }
+        })();
+        break;
+      case "panel:save-chat-history":
+        void (async () => {
+          const payload = raw as {
+            messages?: Message[];
+            summary?: string | null;
+            model?: string | null;
+          };
+          if (!Array.isArray(payload.messages) || payload.messages.length === 0) {
+            return;
+          }
+
+          const settings = await loadSettings();
+          if (!settings.chatEnabled || !settings.token.trim()) {
+            return;
+          }
+
+          const tab = await getActiveTab(session.windowId);
+          if (!tab?.id || !canSummarizeUrl(tab.url)) {
+            return;
+          }
+
+          let cachedExtract: CachedExtract;
+          try {
+            cachedExtract = await ensureChatExtract(session, tab, settings);
+          } catch {
+            return;
+          }
+
+          const summaryText = typeof payload.summary === "string" ? payload.summary.trim() : "";
+          const pageContent = buildChatPageContent({
+            transcript: cachedExtract.transcriptTimedText ?? cachedExtract.text,
+            summary: summaryText,
+            summaryCap: settings.maxChars,
+            metadata: {
+              url: cachedExtract.url,
+              title: cachedExtract.title,
+              source: cachedExtract.source,
+              extractionStrategy:
+                cachedExtract.source === "page"
+                  ? "readability (content script)"
+                  : (cachedExtract.diagnostics?.strategy ?? null),
+              markdownProvider: cachedExtract.diagnostics?.markdown?.used
+                ? (cachedExtract.diagnostics?.markdown?.provider ?? "unknown")
+                : null,
+              firecrawlUsed: cachedExtract.diagnostics?.firecrawl?.used ?? null,
+              transcriptSource: cachedExtract.transcriptSource,
+              transcriptionProvider: cachedExtract.transcriptionProvider,
+              transcriptCache: cachedExtract.diagnostics?.transcript?.cacheStatus ?? null,
+              attemptedTranscriptProviders:
+                cachedExtract.diagnostics?.transcript?.attemptedProviders ?? null,
+              mediaDurationSeconds: cachedExtract.mediaDurationSeconds,
+              totalCharacters: cachedExtract.totalCharacters,
+              wordCount: cachedExtract.wordCount,
+              transcriptCharacters: cachedExtract.transcriptCharacters,
+              transcriptWordCount: cachedExtract.transcriptWordCount,
+              transcriptLines: cachedExtract.transcriptLines,
+              transcriptHasTimestamps: Boolean(cachedExtract.transcriptTimedText),
+              truncated: cachedExtract.truncated,
+            },
+          });
+          const cacheContent = cachedExtract.transcriptTimedText ?? cachedExtract.text;
+
+          try {
+            await fetch("http://127.0.0.1:8787/v1/agent/history/save", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${settings.token.trim()}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                url: cachedExtract.url,
+                title: cachedExtract.title,
+                pageContent,
+                cacheContent,
+                automationEnabled: settings.automationEnabled,
+                messages: payload.messages,
+                model:
+                  typeof payload.model === "string" && payload.model.trim().length > 0
+                    ? payload.model
+                    : settings.model,
+              }),
+            });
+          } catch {
+            // ignore fire-and-forget persistence failures
           }
         })();
         break;

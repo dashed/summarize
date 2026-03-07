@@ -98,6 +98,49 @@ async function injectContentScript(harness: ExtensionHarness, file: string, urlP
   );
 }
 
+async function seedArtifact(
+  harness: ExtensionHarness,
+  urlPrefix: string,
+  record: {
+    fileName: string;
+    mimeType: string;
+    contentBase64: string;
+    size: number;
+    createdAt: string;
+    updatedAt: string;
+  },
+) {
+  const background = await getBackground(harness);
+  await background.evaluate(
+    async ({ prefix, artifact }) => {
+      const tabs = await chrome.tabs.query({});
+      const target = tabs.find((tab) => tab.url?.startsWith(prefix));
+      if (!target?.id) throw new Error("missing tab");
+      const key = `automation.artifacts.${target.id}`;
+      const store = chrome.storage.session ?? chrome.storage.local;
+      await store.set({
+        [key]: {
+          [artifact.fileName]: artifact,
+        },
+      });
+    },
+    { prefix: urlPrefix, artifact: record },
+  );
+}
+
+async function readArtifacts(harness: ExtensionHarness, urlPrefix: string) {
+  const background = await getBackground(harness);
+  return await background.evaluate(async ({ prefix }) => {
+    const tabs = await chrome.tabs.query({});
+    const target = tabs.find((tab) => tab.url?.startsWith(prefix));
+    if (!target?.id) throw new Error("missing tab");
+    const key = `automation.artifacts.${target.id}`;
+    const store = chrome.storage.session ?? chrome.storage.local;
+    const result = await store.get(key);
+    return result[key] ?? null;
+  }, { prefix: urlPrefix });
+}
+
 test.skip(({ browserName }) => browserName !== "chromium", "Chromium-only extension security test");
 test.skip(
   localChromiumSupportIssue !== null,
@@ -194,6 +237,108 @@ test("page scripts cannot spoof the deleted summarize-native-input bridge", asyn
     expect(result).toEqual({
       gotReply: false,
       count: "0",
+    });
+    assertNoErrors(harness);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
+test("page scripts cannot read extension artifacts through the deleted summarize-artifacts bridge", async () => {
+  const harness = await launchExtension();
+  const server = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname !== "/") {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
+      return;
+    }
+
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`<!doctype html>
+      <html>
+        <body>
+          <div id="status">ready</div>
+        </body>
+      </html>`);
+  });
+
+  let serverUrl = "";
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("Failed to resolve local server port"));
+        return;
+      }
+      serverUrl = `http://127.0.0.1:${address.port}`;
+      resolve();
+    });
+  });
+
+  try {
+    const page = await harness.context.newPage();
+    trackErrors(page, harness.pageErrors, harness.consoleErrors);
+    await page.goto(serverUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#status");
+
+    await seedArtifact(harness, serverUrl, {
+      fileName: "secret.txt",
+      mimeType: "text/plain",
+      contentBase64: "c2VjcmV0",
+      size: 6,
+      createdAt: "2026-03-07T12:00:00.000Z",
+      updatedAt: "2026-03-07T12:00:00.000Z",
+    });
+
+    await injectContentScript(harness, "content-scripts/automation.js", serverUrl);
+
+    const result = await page.evaluate(async () => {
+      let reply: unknown = null;
+      const requestId = "attack-artifacts";
+      const handler = (event: MessageEvent) => {
+        const data = event.data as { source?: string; requestId?: string } | null;
+        if (!data || data.source !== "summarize-artifacts" || data.requestId !== requestId) {
+          return;
+        }
+        reply = data;
+      };
+
+      window.addEventListener("message", handler);
+      window.postMessage(
+        {
+          source: "summarize-artifacts",
+          requestId,
+          action: "getArtifact",
+          payload: {
+            fileName: "secret.txt",
+          },
+        },
+        "*",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      window.removeEventListener("message", handler);
+
+      return {
+        gotReply: reply !== null,
+      };
+    });
+
+    const artifacts = await readArtifacts(harness, serverUrl);
+    expect(result).toEqual({
+      gotReply: false,
+    });
+    expect(artifacts).toEqual({
+      "secret.txt": {
+        fileName: "secret.txt",
+        mimeType: "text/plain",
+        contentBase64: "c2VjcmV0",
+        size: 6,
+        createdAt: "2026-03-07T12:00:00.000Z",
+        updatedAt: "2026-03-07T12:00:00.000Z",
+      },
     });
     assertNoErrors(harness);
   } finally {

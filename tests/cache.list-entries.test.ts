@@ -164,15 +164,27 @@ describe("listEntries", () => {
     store.close();
   });
 
-  it("filters entries by URL prefix in metadata when filterUrl is provided", async () => {
+  it("filters entries by exact history URL metadata when filterUrl is provided", async () => {
     const store = await makeTempStore();
 
-    store.setText("summary", "a", "content-a", null, { url: "https://example.com/video1" });
-    store.setText("summary", "b", "content-b", null, { url: "https://example.com/video2" });
-    store.setText("summary", "c", "content-c", null, { url: "https://example.com/video1&t=42" });
+    store.setText("summary", "a", "content-a", null, {
+      url: "https://example.com/video1",
+      historyUrl: "https://example.com/video1",
+    });
+    store.setText("summary", "b", "content-b", null, {
+      url: "https://example.com/video2",
+      historyUrl: "https://example.com/video2",
+    });
+    store.setText("summary", "c", "content-c", null, {
+      url: "https://example.com/video1?utm_source=mail",
+      historyUrl: "https://example.com/video1",
+    });
     store.setText("summary", "d", "content-d", null); // no metadata
 
-    const filtered = store.listEntries("summary", { filterUrl: "https://example.com/video1" });
+    const filtered = store.listEntries("summary", {
+      filterUrl: "https://example.com/video1",
+      filterMode: "canonical",
+    });
     expect(filtered).toHaveLength(2);
     const keys = filtered.map((e) => e.key);
     expect(keys).toContain("a");
@@ -187,7 +199,7 @@ describe("listEntries", () => {
     store.close();
   });
 
-  it("filterUrl prefix match catches YouTube URLs with extra params", async () => {
+  it("filterUrl matches legacy YouTube URLs with extra params at a safe boundary", async () => {
     const store = await makeTempStore();
 
     store.setText("summary", "a", "content-a", null, {
@@ -203,12 +215,35 @@ describe("listEntries", () => {
     // Canonical URL (just ?v=abc123) matches both entries with that video ID
     const filtered = store.listEntries("summary", {
       filterUrl: "https://www.youtube.com/watch?v=abc123",
+      filterMode: "canonical",
     });
     expect(filtered).toHaveLength(2);
     const keys = filtered.map((e) => e.key);
     expect(keys).toContain("a");
     expect(keys).toContain("b");
     expect(keys).not.toContain("c");
+
+    store.close();
+  });
+
+  it("does not match sibling query URLs that only share a prefix", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "id-1", "content-1", null, {
+      url: "https://example.com/article?id=1&utm_source=mail",
+      historyUrl: "https://example.com/article?id=1",
+    });
+    store.setText("summary", "id-10", "content-10", null, {
+      url: "https://example.com/article?id=10",
+      historyUrl: "https://example.com/article?id=10",
+    });
+
+    const filtered = store.listEntries("summary", {
+      filterUrl: "https://example.com/article?id=1",
+      filterMode: "canonical",
+    });
+
+    expect(filtered.map((entry) => entry.key)).toEqual(["id-1"]);
 
     store.close();
   });
@@ -252,9 +287,25 @@ describe("summary restore e2e: listEntries by URL then getEntryWithMeta", () => 
     // Use explicit timestamps so the newer entry is reliably first in DESC order
     const dbPath = join(mkdtempSync(join(tmpdir(), "summarize-cache-restore-")), "cache.sqlite");
     const store = await createCacheStore({ path: dbPath, maxBytes: 1024 * 1024 });
-    insertWithTimestamp(dbPath, "summary", "knuth-1", "# Old Summary\nFirst version.", 1000, metaOld);
-    insertWithTimestamp(dbPath, "summary", "knuth-2", "# Latest Summary\nSecond version.", 2000, metaNew);
-    insertWithTimestamp(dbPath, "summary", "other-key", "# Unrelated", 1500, { url: "https://other.com" });
+    insertWithTimestamp(
+      dbPath,
+      "summary",
+      "knuth-1",
+      "# Old Summary\nFirst version.",
+      1000,
+      metaOld,
+    );
+    insertWithTimestamp(
+      dbPath,
+      "summary",
+      "knuth-2",
+      "# Latest Summary\nSecond version.",
+      2000,
+      metaNew,
+    );
+    insertWithTimestamp(dbPath, "summary", "other-key", "# Unrelated", 1500, {
+      url: "https://other.com",
+    });
 
     // Step 1: list summaries filtered by URL (limit=1 gets most recent by DESC order)
     const entries = store.listEntries("summary", { filterUrl: url, limit: 1 });
@@ -294,12 +345,50 @@ describe("summary restore e2e: listEntries by URL then getEntryWithMeta", () => 
       model: "anthropic/claude-3.5-sonnet",
     });
 
-    const entries = store.listEntries("summary", { filterUrl: pdfUrl, limit: 1 });
+    const entries = store.listEntries("summary", {
+      filterUrl: pdfUrl,
+      filterMode: "canonical",
+      limit: 1,
+    });
     expect(entries).toHaveLength(1);
 
     const detail = store.getEntryWithMeta("summary", entries[0].key);
     expect(detail!.value).toBe("# Paper Summary");
     expect(detail!.metadata?.model).toBe("anthropic/claude-3.5-sonnet");
+
+    store.close();
+  });
+
+  it("summary restore prefers the exact URL over a newer prefix-colliding entry", async () => {
+    const exactUrl = "https://example.com/article?id=1";
+    const siblingUrl = "https://example.com/article?id=10";
+    const dbPath = join(
+      mkdtempSync(join(tmpdir(), "summarize-cache-restore-query-")),
+      "cache.sqlite",
+    );
+    const store = await createCacheStore({ path: dbPath, maxBytes: 1024 * 1024 });
+    insertWithTimestamp(dbPath, "summary", "exact", "# Exact Summary", 2_000, {
+      url: "https://example.com/article?id=1&utm_source=newsletter",
+      historyUrl: exactUrl,
+      title: "Exact",
+    });
+    insertWithTimestamp(dbPath, "summary", "sibling", "# Wrong Summary", 3_000, {
+      url: siblingUrl,
+      historyUrl: siblingUrl,
+      title: "Sibling",
+    });
+
+    const entries = store.listEntries("summary", {
+      filterUrl: exactUrl,
+      filterMode: "canonical",
+      limit: 1,
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].key).toBe("exact");
+
+    const detail = store.getEntryWithMeta("summary", entries[0].key);
+    expect(detail?.value).toBe("# Exact Summary");
+    expect(detail?.metadata?.historyUrl).toBe(exactUrl);
 
     store.close();
   });

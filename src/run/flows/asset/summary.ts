@@ -29,6 +29,7 @@ import {
   SUMMARY_LENGTH_TARGET_CHARACTERS,
   SUMMARY_SYSTEM_PROMPT,
 } from "../../../prompts/index.js";
+import { buildHistoryUrlMetadata } from "../../../shared/history.js";
 import {
   type AssetAttachment,
   ensureCliAttachmentPath,
@@ -691,6 +692,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       length: lengthKey,
       language: languageKey,
       url: args.url ?? null,
+      historyUrl: buildHistoryUrlMetadata(args.url ?? null),
       title: args.title ?? null,
       summaryChars: summaryResult.summary.length,
       prompt: promptText,

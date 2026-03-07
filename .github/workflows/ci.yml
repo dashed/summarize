@@ -32,11 +32,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Tests (coverage)
-        run: pnpm test:coverage
+      - name: Check
+        run: pnpm -s check
 
       - name: Build
         run: pnpm build
@@ -87,6 +84,9 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Extension static checks
+        run: pnpm -s check:extension
 
       - name: Install Playwright (Chromium)
         run: pnpm -C apps/chrome-extension exec playwright install --with-deps chromium

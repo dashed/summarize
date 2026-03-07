@@ -26,6 +26,7 @@ import {
   SUMMARY_SYSTEM_PROMPT,
   type VideoDetailLevel,
 } from "../../../prompts/index.js";
+import { buildHistoryUrlMetadata } from "../../../shared/history.js";
 import {
   readLastSuccessfulCliProvider,
   writeLastSuccessfulCliProvider,
@@ -1167,6 +1168,7 @@ export async function summarizeExtractedUrl({
       length: lengthKey,
       language: languageKey,
       url,
+      historyUrl: buildHistoryUrlMetadata(url),
       title: extracted.title ?? null,
       siteName: extracted.siteName ?? null,
       summaryChars: summaryResult.summary.length,

@@ -4,10 +4,10 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
+import type { CacheState } from "../cache.js";
 import type { VideoDetailLevel } from "../prompts/index.js";
 import type { SlideExtractionResult, SlideSettings } from "../slides/index.js";
 import type { DaemonConfig } from "./config.js";
-import { hashString, type CacheState } from "../cache.js";
 import { loadSummarizeConfig } from "../config.js";
 import { createDaemonLogger } from "../logging/daemon.js";
 import { runWithProcessContext, setProcessObserver } from "../processes.js";
@@ -17,12 +17,14 @@ import { resolveExecutableInPath } from "../run/env.js";
 import { formatModelLabelForDisplay } from "../run/finish-line.js";
 import { createMediaCacheFromConfig } from "../run/media-cache-state.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
+import { buildHistoryUrlMetadata } from "../shared/history.js";
 import { encodeSseEvent, type SseEvent, type SseSlidesData } from "../shared/sse-events.js";
 import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js";
 import { resolveGitSha, resolvePackageVersion } from "../version.js";
 import { completeAgentResponse, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
+import { buildChatHistoryKey } from "./history.js";
 import { resolveDaemonLogPaths } from "./launchd.js";
 import { buildModelPickerOptions } from "./models.js";
 import {
@@ -1653,12 +1655,13 @@ export async function runDaemonServer({
         const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
         const filterUrl = url.searchParams.get("url") ?? undefined;
+        const filterMode = url.searchParams.get("match") === "canonical" ? "canonical" : "prefix";
         const store = cacheState.store;
         if (!store) {
           json(res, 200, { ok: true, summaries: [] }, cors);
           return;
         }
-        const entries = store.listEntries("summary", { limit, offset, filterUrl });
+        const entries = store.listEntries("summary", { limit, offset, filterUrl, filterMode });
         json(res, 200, { ok: true, summaries: entries }, cors);
         return;
       }
@@ -1686,7 +1689,12 @@ export async function runDaemonServer({
           json(res, 400, { ok: false, error: "Invalid body" }, cors);
           return;
         }
-        const { url: bodyUrl, automationEnabled } = body as Record<string, unknown>;
+        const {
+          url: bodyUrl,
+          automationEnabled,
+          pageContent,
+          cacheContent,
+        } = body as Record<string, unknown>;
         if (!bodyUrl) {
           json(res, 400, { ok: false, error: "Missing url" }, cors);
           return;
@@ -1696,9 +1704,12 @@ export async function runDaemonServer({
           json(res, 200, { ok: true, messages: [] }, cors);
           return;
         }
-        const key = hashString(
-          JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }),
-        );
+        const key = buildChatHistoryKey({
+          url: String(bodyUrl),
+          automationEnabled: !!automationEnabled,
+          pageContent: typeof pageContent === "string" ? pageContent : null,
+          cacheContent: typeof cacheContent === "string" ? cacheContent : null,
+        });
         const messages = store.getJson<unknown[]>("chat", key);
         json(res, 200, { ok: true, messages: messages ?? [] }, cors);
         return;
@@ -1714,6 +1725,8 @@ export async function runDaemonServer({
           url: bodyUrl,
           title,
           automationEnabled,
+          pageContent,
+          cacheContent,
           messages,
           model,
         } = body as Record<string, unknown>;
@@ -1726,11 +1739,15 @@ export async function runDaemonServer({
           json(res, 200, { ok: false, error: "Cache not available" }, cors);
           return;
         }
-        const key = hashString(
-          JSON.stringify({ url: bodyUrl, automationEnabled: !!automationEnabled }),
-        );
+        const key = buildChatHistoryKey({
+          url: String(bodyUrl),
+          automationEnabled: !!automationEnabled,
+          pageContent: typeof pageContent === "string" ? pageContent : null,
+          cacheContent: typeof cacheContent === "string" ? cacheContent : null,
+        });
         const metadata = {
-          url: bodyUrl,
+          url: String(bodyUrl),
+          historyUrl: buildHistoryUrlMetadata(String(bodyUrl)),
           title: title ?? null,
           model: model ?? null,
           messageCount: messages.length,
@@ -1744,12 +1761,13 @@ export async function runDaemonServer({
         const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
         const offset = parseInt(url.searchParams.get("offset") ?? "0");
         const filterUrl = url.searchParams.get("url") ?? undefined;
+        const filterMode = url.searchParams.get("match") === "canonical" ? "canonical" : "prefix";
         const store = cacheState.store;
         if (!store) {
           json(res, 200, { ok: true, chats: [] }, cors);
           return;
         }
-        const entries = store.listEntries("chat", { limit, offset, filterUrl });
+        const entries = store.listEntries("chat", { limit, offset, filterUrl, filterMode });
         json(res, 200, { ok: true, chats: entries }, cors);
         return;
       }
