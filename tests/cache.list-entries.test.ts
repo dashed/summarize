@@ -243,6 +243,68 @@ describe("listEntries", () => {
   });
 });
 
+describe("summary restore e2e: listEntries by URL then getEntryWithMeta", () => {
+  it("finds the most recent summary for a URL and retrieves its content", async () => {
+    const url = "https://www-cs-faculty.stanford.edu/~knuth/papers/claude-cycles.pdf";
+    const metaOld = { url, title: "Claude Cycles", model: "google/gemini-3-flash" };
+    const metaNew = { url, title: "Claude Cycles", model: "google/gemini-3-flash" };
+
+    // Use explicit timestamps so the newer entry is reliably first in DESC order
+    const dbPath = join(mkdtempSync(join(tmpdir(), "summarize-cache-restore-")), "cache.sqlite");
+    const store = await createCacheStore({ path: dbPath, maxBytes: 1024 * 1024 });
+    insertWithTimestamp(dbPath, "summary", "knuth-1", "# Old Summary\nFirst version.", 1000, metaOld);
+    insertWithTimestamp(dbPath, "summary", "knuth-2", "# Latest Summary\nSecond version.", 2000, metaNew);
+    insertWithTimestamp(dbPath, "summary", "other-key", "# Unrelated", 1500, { url: "https://other.com" });
+
+    // Step 1: list summaries filtered by URL (limit=1 gets most recent by DESC order)
+    const entries = store.listEntries("summary", { filterUrl: url, limit: 1 });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].key).toBe("knuth-2");
+    expect(entries[0].metadata?.url).toBe(url);
+
+    // Step 2: fetch the full content by key
+    const detail = store.getEntryWithMeta("summary", entries[0].key);
+    expect(detail).not.toBeNull();
+    expect(detail!.value).toBe("# Latest Summary\nSecond version.");
+    expect(detail!.metadata).toEqual(metaNew);
+
+    store.close();
+  });
+
+  it("returns empty when no summary exists for the URL", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "other", "content", null, { url: "https://other.com" });
+
+    const entries = store.listEntries("summary", {
+      filterUrl: "https://example.com/nonexistent",
+      limit: 1,
+    });
+    expect(entries).toHaveLength(0);
+
+    store.close();
+  });
+
+  it("correctly matches PDF URLs with path components", async () => {
+    const store = await makeTempStore();
+
+    const pdfUrl = "https://arxiv.org/pdf/2301.12345.pdf";
+    store.setText("summary", "arxiv-1", "# Paper Summary", null, {
+      url: pdfUrl,
+      model: "anthropic/claude-3.5-sonnet",
+    });
+
+    const entries = store.listEntries("summary", { filterUrl: pdfUrl, limit: 1 });
+    expect(entries).toHaveLength(1);
+
+    const detail = store.getEntryWithMeta("summary", entries[0].key);
+    expect(detail!.value).toBe("# Paper Summary");
+    expect(detail!.metadata?.model).toBe("anthropic/claude-3.5-sonnet");
+
+    store.close();
+  });
+});
+
 describe("getEntryWithMeta", () => {
   it("returns value, created_at, and metadata for existing entries", async () => {
     const store = await makeTempStore();

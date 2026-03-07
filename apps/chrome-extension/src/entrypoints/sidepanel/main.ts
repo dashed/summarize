@@ -21,7 +21,7 @@ import { listSkills } from "../../automation/skills-store";
 import { executeToolCall, getAutomationToolNames } from "../../automation/tools";
 import { readPresetOrCustomValue } from "../../lib/combo";
 import { buildIdleSubtitle, formatModelBadge } from "../../lib/header";
-import { canonicalizeUrlForHistory, parseSummaryHistoryMeta } from "../../lib/history";
+import { canonicalizeUrlForHistory, isSpecificEnoughForHistoryLookup, parseSummaryHistoryMeta } from "../../lib/history";
 import { buildMetricsParts, buildMetricsTokens } from "../../lib/metrics";
 import {
   defaultSettings,
@@ -1236,6 +1236,10 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
     return;
   } else {
     renderMarkdownDisplay();
+    // Cache had no summary — try to restore from daemon history.
+    if (payload.url) {
+      void restoreSummaryFromHistory(payload.url);
+    }
   }
   queueSlidesRender();
   setPhase("idle");
@@ -2707,6 +2711,10 @@ async function restoreChatHistory() {
   if (history?.length) {
     const compacted = compactChatHistory(history, chatLimits);
     chatController.setMessages(compacted, { scroll: false });
+    // Chat restored but summary may be missing — try to restore from daemon history.
+    if (!panelState.summaryMarkdown && activeTabUrl) {
+      void restoreSummaryFromHistory(activeTabUrl);
+    }
     return;
   }
 
@@ -2722,6 +2730,10 @@ async function restoreChatHistory() {
     if (!parsed.length) return;
     const compacted = compactChatHistory(parsed, chatLimits);
     chatController.setMessages(compacted, { scroll: false });
+    // Chat restored but summary may be missing — try to restore from daemon history.
+    if (!panelState.summaryMarkdown && activeTabUrl) {
+      void restoreSummaryFromHistory(activeTabUrl);
+    }
     await persistChatHistory();
   } catch {
     // ignore
@@ -2736,14 +2748,20 @@ async function restoreChatHistory() {
 let summaryRestoreLoadId = 0;
 
 async function restoreSummaryFromHistory(url: string) {
+  console.log("[restoreSummary] called for:", url, "existing summary:", !!panelState.summaryMarkdown);
   if (panelState.summaryMarkdown) return;
   summaryRestoreLoadId += 1;
   const loadId = summaryRestoreLoadId;
   try {
     const token = await getAuthToken();
-    if (!token) return;
+    if (!token) { console.log("[restoreSummary] no token"); return; }
     const canonical = canonicalizeUrlForHistory(url);
-    if (!canonical) return;
+    if (!canonical) { console.log("[restoreSummary] no canonical url"); return; }
+    if (!isSpecificEnoughForHistoryLookup(canonical)) {
+      console.log("[restoreSummary] URL too broad for prefix match, skipping:", canonical);
+      return;
+    }
+    console.log("[restoreSummary] fetching list for canonical:", canonical);
     const listRes = await fetch(
       `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&limit=1`,
       { headers: { Authorization: `Bearer ${token}` } },
@@ -2752,11 +2770,13 @@ async function restoreSummaryFromHistory(url: string) {
       ok?: boolean;
       summaries?: Array<{ key: string; metadata: Record<string, unknown> | null }>;
     };
-    if (loadId !== summaryRestoreLoadId) return;
-    if (!listData.ok || !listData.summaries?.length) return;
-    if (panelState.summaryMarkdown) return;
-    if (activeTabUrl !== url) return;
+    console.log("[restoreSummary] list response:", { ok: listData.ok, count: listData.summaries?.length });
+    if (loadId !== summaryRestoreLoadId) { console.log("[restoreSummary] stale loadId"); return; }
+    if (!listData.ok || !listData.summaries?.length) { console.log("[restoreSummary] no summaries found"); return; }
+    if (panelState.summaryMarkdown) { console.log("[restoreSummary] summary already set"); return; }
+    if (activeTabUrl !== url) { console.log("[restoreSummary] url changed:", activeTabUrl, "!==", url); return; }
     const entry = listData.summaries[0];
+    console.log("[restoreSummary] fetching detail for key:", entry.key);
     const detailRes = await fetch(
       `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(entry.key)}`,
       { headers: { Authorization: `Bearer ${token}` } },
@@ -2766,19 +2786,23 @@ async function restoreSummaryFromHistory(url: string) {
       value?: string;
       metadata?: Record<string, unknown> | null;
     };
-    if (loadId !== summaryRestoreLoadId) return;
-    if (!detailData.ok || !detailData.value) return;
-    if (panelState.summaryMarkdown) return;
-    if (activeTabUrl !== url) return;
+    console.log("[restoreSummary] detail response:", { ok: detailData.ok, hasValue: !!detailData.value, valueLen: detailData.value?.length });
+    if (loadId !== summaryRestoreLoadId) { console.log("[restoreSummary] stale loadId (2)"); return; }
+    if (!detailData.ok || !detailData.value) { console.log("[restoreSummary] no value in detail"); return; }
+    if (panelState.summaryMarkdown) { console.log("[restoreSummary] summary already set (2)"); return; }
+    if (activeTabUrl !== url) { console.log("[restoreSummary] url changed (2)"); return; }
+    console.log("[restoreSummary] rendering summary, length:", detailData.value.length);
     renderMarkdown(detailData.value);
-    const { title, model } = parseSummaryHistoryMeta(detailData.metadata);
+    const { title, model } = parseSummaryHistoryMeta(detailData.metadata ?? entry.metadata);
+    // Mark currentSource so updateControls doesn't overwrite our header on the next ui:state.
+    panelState.currentSource = { url, title };
     headerController.setBaseTitle(title);
     headerController.setBaseSubtitle("");
     panelState.lastMeta = { ...panelState.lastMeta, model };
     updateModelBadge();
     setPhase("idle");
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn("[restoreSummary] error:", err);
   }
 }
 
@@ -3687,6 +3711,7 @@ function updateControls(state: UiState) {
     inputModeOverride = null;
     if (nextTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(nextTabId, nextTabUrl);
+      console.log("[tabSwitch] resolve:", { nextTabId, nextTabUrl, hasCached: !!cached, hasSummary: !!cached?.summaryMarkdown });
       if (cached) {
         panelCacheController.syncNow();
         streamController.abort();
@@ -3945,14 +3970,20 @@ function handleBgMessage(msg: BgToPanel) {
     }
     case "ui:cache": {
       const result = panelCacheController.consumeResponse(msg);
+      console.log("[ui:cache] consumeResponse:", result ? { tabId: result.tabId, url: result.url, hasCache: !!result.cache, hasSummary: !!result.cache?.summaryMarkdown } : null);
       if (!result) return;
-      if (activeTabId !== result.tabId || activeTabUrl !== result.url) return;
+      if (activeTabId !== result.tabId || activeTabUrl !== result.url) {
+        console.log("[ui:cache] tab/url mismatch, activeTabId:", activeTabId, "activeTabUrl:", activeTabUrl);
+        return;
+      }
       if (!result.cache) {
         // Cache lost (background worker recycled, extension restarted) —
         // try to restore the summary from daemon history as a fallback.
+        console.log("[ui:cache] no cache, calling restoreSummaryFromHistory for:", result.url);
         void restoreSummaryFromHistory(result.url);
         return;
       }
+      console.log("[ui:cache] applying panel cache, summaryMarkdown length:", result.cache.summaryMarkdown?.length ?? 0);
       applyPanelCache(result.cache, { preserveChat: result.preserveChat });
       return;
     }

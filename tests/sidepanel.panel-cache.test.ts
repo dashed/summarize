@@ -249,6 +249,78 @@ describe("panel cache controller", () => {
     expect(cached!.runId).toBe("run-partial");
     expect(cached!.summaryMarkdown).toBe("# Title\n\nPartial content so far...");
   });
+
+  it("consumeResponse returns cache: null when background has no cache", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    const controller = createPanelCacheController({
+      getSnapshot: () => null,
+      sendCache,
+      sendRequest,
+    });
+
+    const request = controller.request(5, "https://example.com/article", false);
+    const result = controller.consumeResponse({
+      requestId: request.requestId,
+      ok: false,
+      // cache is undefined — simulates background with empty panelCacheByTabId
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.tabId).toBe(5);
+    expect(result!.url).toBe("https://example.com/article");
+    expect(result!.preserveChat).toBe(false);
+    expect(result!.cache).toBeNull();
+  });
+
+  it("consumeResponse returns cache: null when ok is true but cache is undefined", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    const controller = createPanelCacheController({
+      getSnapshot: () => null,
+      sendCache,
+      sendRequest,
+    });
+
+    const request = controller.request(5, "https://example.com", false);
+    const result = controller.consumeResponse({
+      requestId: request.requestId,
+      ok: true,
+      // cache is undefined
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.cache).toBeNull();
+  });
+
+  it("tab switch with lost cache: local miss + background miss produces null cache result", () => {
+    const sendCache = vi.fn();
+    const sendRequest = vi.fn();
+    // Tab A had a summary, then service worker restarted (no snapshot available)
+    const controller = createPanelCacheController({
+      getSnapshot: () => null,
+      sendCache,
+      sendRequest,
+    });
+
+    // Step 1: local cache is empty (fresh sidepanel)
+    expect(controller.resolve(10, "https://example.com/pdf")).toBeNull();
+
+    // Step 2: request from background
+    const request = controller.request(10, "https://example.com/pdf", false);
+
+    // Step 3: background responds with no cache (service worker restarted)
+    const result = controller.consumeResponse({
+      requestId: request.requestId,
+      ok: false,
+    });
+
+    // Should produce a result with null cache — caller should trigger history fallback
+    expect(result).not.toBeNull();
+    expect(result!.cache).toBeNull();
+    expect(result!.tabId).toBe(10);
+    expect(result!.url).toBe("https://example.com/pdf");
+  });
 });
 
 describe("resolveRestoreAction", () => {
