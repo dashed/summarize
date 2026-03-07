@@ -15,11 +15,13 @@ import {
   parseSlideSummariesFromMarkdown,
   splitSlideTitleFromText,
 } from "../../../src/run/flows/url/slides-text.js";
+import { getLocalChromiumSupportIssue } from "./browser-support";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const consoleErrorAllowlist: RegExp[] = [];
 const allowFirefoxExtensionTests = process.env.ALLOW_FIREFOX_EXTENSION_TESTS === "1";
+const localChromiumSupportIssue = getLocalChromiumSupportIssue();
 const allowYouTubeE2E = process.env.ALLOW_YOUTUBE_E2E === "1";
 const youtubeEnvUrls =
   typeof process.env.SUMMARIZE_YOUTUBE_URLS === "string"
@@ -52,6 +54,10 @@ type BrowserType = "chromium" | "firefox";
 test.skip(
   ({ browserName }) => browserName === "firefox" && !allowFirefoxExtensionTests,
   "Firefox extension tests are blocked by Playwright limitations. Set ALLOW_FIREFOX_EXTENSION_TESTS=1 to run.",
+);
+test.skip(
+  ({ browserName }) => browserName === "chromium" && localChromiumSupportIssue !== null,
+  localChromiumSupportIssue ?? "Chromium E2E host support check passed.",
 );
 
 type ExtensionHarness = {

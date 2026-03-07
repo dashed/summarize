@@ -3,12 +3,15 @@ import { shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { defineBackground } from "wxt/utils/define-background";
 import { parseSseEvent, type SseSlidesData } from "../../../../src/shared/sse-events.js";
 import {
-  deleteArtifact,
-  getArtifactRecord,
-  listArtifacts,
-  parseArtifact,
-  upsertArtifact,
-} from "../automation/artifacts-store";
+  handleArtifactsRequest,
+  handleNativeInputRequest,
+  isArtifactsRequest,
+  isNativeInputRequest,
+} from "../automation/user-script-requests";
+import type {
+  NativeInputPayload,
+  NativeInputResponse,
+} from "../automation/user-script-requests";
 import { readAgentResponse } from "../lib/agent-response";
 import { buildChatPageContent } from "../lib/chat-context";
 import { exportYouTubeCookies } from "../lib/cookies";
@@ -92,25 +95,6 @@ type BgToHover =
   | { type: "hover:chunk"; requestId: string; url: string; text: string }
   | { type: "hover:done"; requestId: string; url: string }
   | { type: "hover:error"; requestId: string; url: string; message: string };
-
-type NativeInputRequest = {
-  type: "automation:native-input";
-  payload: {
-    action: "click" | "type" | "press" | "keydown" | "keyup";
-    x?: number;
-    y?: number;
-    text?: string;
-    key?: string;
-  };
-};
-
-type NativeInputResponse = { ok: true } | { ok: false; error: string };
-type ArtifactsRequest = {
-  type: "automation:artifacts";
-  requestId: string;
-  action?: string;
-  payload?: unknown;
-};
 
 type UiState = {
   panelOpen: boolean;
@@ -618,7 +602,7 @@ function resolveKeyCode(key: string): { code: string; keyCode: number; text?: st
 
 async function dispatchNativeInput(
   tabId: number,
-  payload: NativeInputRequest["payload"],
+  payload: NativeInputPayload,
 ): Promise<NativeInputResponse> {
   const hasPermission = await chrome.permissions.contains({ permissions: ["debugger"] });
   if (!hasPermission) {
@@ -700,7 +684,54 @@ async function dispatchNativeInput(
   }
 }
 
+type UserScriptMessageListener = (
+  message: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response: unknown) => void,
+) => boolean | void;
+
+type RuntimeWithUserScriptMessaging = typeof chrome.runtime & {
+  onUserScriptMessage?: {
+    addListener(callback: UserScriptMessageListener): void;
+  };
+};
+
+function registerUserScriptMessageListener() {
+  const runtime = chrome.runtime as RuntimeWithUserScriptMessaging;
+  runtime.onUserScriptMessage?.addListener((raw, sender, sendResponse) => {
+    if (isNativeInputRequest(raw)) {
+      void handleNativeInputRequest({
+        request: raw,
+        tabId: sender.tab?.id,
+        dispatchNativeInput,
+      }).then((response) => {
+        try {
+          sendResponse(response);
+        } catch {
+          // ignore
+        }
+      });
+      return true;
+    }
+
+    if (isArtifactsRequest(raw)) {
+      void handleArtifactsRequest({
+        request: raw,
+        tabId: sender.tab?.id,
+      }).then((response) => {
+        try {
+          sendResponse(response);
+        } catch {
+          // ignore
+        }
+      });
+      return true;
+    }
+  });
+}
+
 export default defineBackground(() => {
+  registerUserScriptMessageListener();
   const panelSessions = new Map<number, PanelSession>();
   const lastMediaProbeByTab = new Map<number, string>();
   type CachedExtract = {
@@ -2229,132 +2260,12 @@ export default defineBackground(() => {
   });
 
   chrome.runtime.onMessage.addListener(
-    (
-      raw: HoverToBg | NativeInputRequest | ArtifactsRequest,
-      sender,
-      sendResponse,
-    ): boolean | undefined => {
+    (raw: HoverToBg, sender, sendResponse): boolean | undefined => {
       if (!raw || typeof raw !== "object" || typeof (raw as { type?: unknown }).type !== "string") {
         return;
       }
 
       const type = (raw as { type: string }).type;
-      if (type === "automation:native-input") {
-        const msg = raw as NativeInputRequest;
-        void (async () => {
-          const tabId = sender.tab?.id;
-          if (!tabId) {
-            try {
-              sendResponse({
-                ok: false,
-                error: "Missing sender tab",
-              } satisfies NativeInputResponse);
-            } catch {
-              // ignore
-            }
-            return;
-          }
-          const result = await dispatchNativeInput(tabId, msg.payload);
-          try {
-            sendResponse(result);
-          } catch {
-            // ignore
-          }
-        })();
-        return true;
-      }
-      if (type === "automation:artifacts") {
-        const msg = raw as ArtifactsRequest;
-        void (async () => {
-          const tabId = sender.tab?.id;
-          if (!tabId) {
-            try {
-              sendResponse({ ok: false, error: "Missing sender tab" });
-            } catch {
-              // ignore
-            }
-            return;
-          }
-
-          const payload = (msg.payload ?? {}) as {
-            fileName?: string;
-            content?: unknown;
-            mimeType?: string;
-            asBase64?: boolean;
-          };
-
-          try {
-            if (msg.action === "listArtifacts") {
-              const records = await listArtifacts(tabId);
-              sendResponse({
-                ok: true,
-                result: records.map(({ fileName, mimeType, size, updatedAt }) => ({
-                  fileName,
-                  mimeType,
-                  size,
-                  updatedAt,
-                })),
-              });
-              return;
-            }
-
-            if (msg.action === "getArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const record = await getArtifactRecord(tabId, payload.fileName);
-              if (!record) throw new Error(`Artifact not found: ${payload.fileName}`);
-              const isText =
-                record.mimeType.startsWith("text/") ||
-                record.mimeType === "application/json" ||
-                record.fileName.endsWith(".json");
-              const value = payload.asBase64 ? record : isText ? parseArtifact(record) : record;
-              sendResponse({ ok: true, result: value });
-              return;
-            }
-
-            if (msg.action === "createOrUpdateArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const record = await upsertArtifact(tabId, {
-                fileName: payload.fileName,
-                content: payload.content,
-                mimeType: payload.mimeType,
-                contentBase64:
-                  typeof payload.content === "object" &&
-                  payload.content &&
-                  "contentBase64" in payload.content
-                    ? (payload.content as { contentBase64?: string }).contentBase64
-                    : undefined,
-              });
-              sendResponse({
-                ok: true,
-                result: {
-                  fileName: record.fileName,
-                  mimeType: record.mimeType,
-                  size: record.size,
-                  updatedAt: record.updatedAt,
-                },
-              });
-              return;
-            }
-
-            if (msg.action === "deleteArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const deleted = await deleteArtifact(tabId, payload.fileName);
-              sendResponse({ ok: true, result: { ok: deleted } });
-              return;
-            }
-
-            throw new Error(`Unknown artifact action: ${msg.action ?? "unknown"}`);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            try {
-              sendResponse({ ok: false, error: message });
-            } catch {
-              // ignore
-            }
-          }
-        })();
-        return true;
-      }
       if (type === "hover:summarize") {
         const msg = raw as HoverToBg & { type: "hover:summarize" };
         void (async () => {
