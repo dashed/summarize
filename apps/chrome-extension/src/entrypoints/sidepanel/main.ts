@@ -228,6 +228,9 @@ const chatMessagesEl = byId<HTMLDivElement>("chatMessages");
 const chatInputEl = byId<HTMLTextAreaElement>("chatInput");
 const chatSendBtn = byId<HTMLButtonElement>("chatSend");
 const chatContextStatusEl = byId<HTMLDivElement>("chatContextStatus");
+const chatHistoryBannerEl = byId<HTMLDivElement>("chatHistoryBanner");
+const chatHistoryBannerTextEl = byId<HTMLSpanElement>("chatHistoryBannerText");
+const chatHistoryBannerDismissBtn = byId<HTMLButtonElement>("chatHistoryBannerDismiss");
 const automationNoticeEl = byId<HTMLDivElement>("automationNotice");
 const automationNoticeTitleEl = byId<HTMLDivElement>("automationNoticeTitle");
 const automationNoticeMessageEl = byId<HTMLDivElement>("automationNoticeMessage");
@@ -323,6 +326,7 @@ let summarizeVideoLabel = "Video";
 let historyMode: "summaries" | "chats" = "summaries";
 let historyOpen = false;
 let loadedHistoryKey: string | null = null;
+let loadedChatHistoryKey: string | null = null;
 let summarizePageWords: number | null = null;
 let summarizeVideoDurationSeconds: number | null = null;
 
@@ -4312,12 +4316,13 @@ async function loadHistory() {
     const entries = data.summaries ?? data.chats ?? [];
     const hasSummaryDisplayed = panelState.summaryMarkdown != null && panelState.phase === "idle";
     const hasChatActive = chatController.getMessages().length > 0;
-    const currentKey = resolveCurrentKey(historyMode, loadedHistoryKey);
+    const currentKey = resolveCurrentKey(historyMode, loadedHistoryKey, loadedChatHistoryKey);
     const markFirst = shouldMarkFirstAsCurrent(
       historyMode,
       hasSummaryDisplayed,
       loadedHistoryKey,
       hasChatActive,
+      loadedChatHistoryKey,
     );
     renderHistoryList(entries, currentKey, markFirst);
   } catch {
@@ -4419,6 +4424,7 @@ async function loadHistoryEntry(key: string, mode: string) {
       const data = (await res.json()) as {
         ok?: boolean;
         value?: string;
+        created_at?: number;
         metadata?: Record<string, unknown> | null;
       };
       if (data.ok && data.value) {
@@ -4431,10 +4437,20 @@ async function loadHistoryEntry(key: string, mode: string) {
           resetChatState();
           const compacted = compactChatHistory(parsed, chatLimits);
           chatController.setMessages(compacted, { scroll: true });
+          loadedChatHistoryKey = key;
+          const dateStr = data.created_at
+            ? new Date(data.created_at).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "unknown date";
+          const msgCount = data.metadata?.messageCount ?? parsed.length;
+          chatHistoryBannerTextEl.textContent = `Viewing saved chat \u00b7 ${dateStr} \u00b7 ${msgCount} messages`;
+          chatHistoryBannerEl.classList.remove("hidden");
+          void loadHistory();
         }
-        historyOpen = false;
-        historyPanelEl.classList.add("hidden");
-        historyToggleBtn.classList.remove("isActive");
       }
     } catch {
       // ignore
@@ -4454,6 +4470,14 @@ function toggleHistoryPanel() {
 }
 
 historyToggleBtn.addEventListener("click", () => toggleHistoryPanel());
+
+chatHistoryBannerDismissBtn.addEventListener("click", () => {
+  loadedChatHistoryKey = null;
+  chatHistoryBannerEl.classList.add("hidden");
+  resetChatState();
+  void restoreChatHistory();
+  if (historyOpen) void loadHistory();
+});
 
 historyTabSummariesBtn.addEventListener("click", () => {
   historyMode = "summaries";
@@ -4554,6 +4578,8 @@ function resetChatState() {
   pendingAgentRequests.clear();
   abortAgentRequested = false;
   lastNavigationMessageUrl = null;
+  loadedChatHistoryKey = null;
+  chatHistoryBannerEl.classList.add("hidden");
 }
 
 function finishStreamingMessage() {

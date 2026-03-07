@@ -8,13 +8,14 @@
  *
  * - In "summaries" mode, returns the key of the history entry that was
  *   explicitly loaded (loadedHistoryKey) or null.
- * - In "chats" mode, there's no explicit key tracking — returns null.
+ * - In "chats" mode, returns the key of the loaded chat history entry or null.
  */
 export function resolveCurrentKey(
   historyMode: "summaries" | "chats",
   loadedHistoryKey: string | null,
+  loadedChatKey?: string | null,
 ): string | null {
-  return historyMode === "summaries" ? (loadedHistoryKey ?? null) : null;
+  return historyMode === "summaries" ? (loadedHistoryKey ?? null) : (loadedChatKey ?? null);
 }
 
 /**
@@ -24,15 +25,19 @@ export function resolveCurrentKey(
  * - In "summaries" mode: mark first as current when a summary is
  *   displayed AND no explicit history entry was loaded (meaning the
  *   displayed summary is the live one, not from history).
- * - In "chats" mode: mark first as current when a chat session is active.
+ * - In "chats" mode: mark first as current when a chat session is active
+ *   AND no explicit chat history entry was loaded.
  */
 export function shouldMarkFirstAsCurrent(
   historyMode: "summaries" | "chats",
   hasSummaryDisplayed: boolean,
   loadedHistoryKey: string | null,
   hasChatActive: boolean,
+  loadedChatKey?: string | null,
 ): boolean {
-  return historyMode === "summaries" ? hasSummaryDisplayed && !loadedHistoryKey : hasChatActive;
+  return historyMode === "summaries"
+    ? hasSummaryDisplayed && !loadedHistoryKey
+    : hasChatActive && !loadedChatKey;
 }
 
 /**

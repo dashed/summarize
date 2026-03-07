@@ -15,12 +15,24 @@ describe("resolveCurrentKey", () => {
     expect(resolveCurrentKey("summaries", null)).toBeNull();
   });
 
-  it("returns null in chats mode even with loadedHistoryKey", () => {
+  it("returns null in chats mode when no chat key loaded", () => {
     expect(resolveCurrentKey("chats", "abc123")).toBeNull();
   });
 
-  it("returns null in chats mode with no key", () => {
+  it("returns null in chats mode with no keys at all", () => {
     expect(resolveCurrentKey("chats", null)).toBeNull();
+  });
+
+  it("returns loadedChatKey in chats mode", () => {
+    expect(resolveCurrentKey("chats", null, "chat-key-1")).toBe("chat-key-1");
+  });
+
+  it("ignores loadedHistoryKey in chats mode when loadedChatKey is set", () => {
+    expect(resolveCurrentKey("chats", "summary-key", "chat-key-1")).toBe("chat-key-1");
+  });
+
+  it("ignores loadedChatKey in summaries mode", () => {
+    expect(resolveCurrentKey("summaries", "summary-key", "chat-key-1")).toBe("summary-key");
   });
 });
 
@@ -44,7 +56,7 @@ describe("shouldMarkFirstAsCurrent", () => {
   });
 
   describe("chats mode", () => {
-    it("marks first when chat is active", () => {
+    it("marks first when chat is active and no chat key loaded", () => {
       expect(shouldMarkFirstAsCurrent("chats", false, null, true)).toBe(true);
     });
 
@@ -58,6 +70,14 @@ describe("shouldMarkFirstAsCurrent", () => {
 
     it("ignores loadedHistoryKey in chats mode", () => {
       expect(shouldMarkFirstAsCurrent("chats", false, "some-key", true)).toBe(true);
+    });
+
+    it("does not mark first when a chat history entry is loaded", () => {
+      expect(shouldMarkFirstAsCurrent("chats", false, null, true, "chat-key")).toBe(false);
+    });
+
+    it("does not mark first when chat key loaded and no active chat", () => {
+      expect(shouldMarkFirstAsCurrent("chats", false, null, false, "chat-key")).toBe(false);
     });
   });
 });
