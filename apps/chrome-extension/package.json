@@ -9,8 +9,10 @@
     "build:firefox": "BROWSER=firefox wxt build",
     "dev": "wxt dev",
     "dev:firefox": "BROWSER=firefox wxt dev",
-    "lint": "pnpm lint:ox",
+    "lint": "pnpm lint:ox && pnpm lint:css",
     "lint:ox": "pnpm exec oxlint --type-aware --tsconfig tsconfig.check.json --config ../../.oxlintrc.json src tests wxt.config.ts playwright.config.ts",
+    "lint:css": "pnpm exec stylelint \"src/**/*.css\"",
+    "lint:css:fix": "pnpm exec stylelint \"src/**/*.css\" --fix",
     "test": "pnpm test:e2e",
     "test:chrome": "env -u NO_COLOR pnpm build && env -u NO_COLOR playwright test -c playwright.config.ts --project=chromium",
     "test:e2e": "env -u NO_COLOR pnpm build && env -u NO_COLOR playwright test -c playwright.config.ts --project=chromium",
@@ -30,6 +32,8 @@
   "devDependencies": {
     "@playwright/test": "1.58.2",
     "@types/chrome": "^0.1.36",
+    "stylelint": "^17.4.0",
+    "stylelint-config-standard": "^40.0.0",
     "typescript": "^5.9.3",
     "wxt": "0.20.17"
   }

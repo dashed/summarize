@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/stylelintrc.json",
+  "extends": ["stylelint-config-standard"],
+  "rules": {
+    "no-descending-specificity": null,
+    "no-duplicate-selectors": [true, { "severity": "warning" }],
+    "declaration-block-no-duplicate-properties": [true, { "ignore": ["consecutive-duplicates-with-different-values"] }],
+    "declaration-property-value-keyword-no-deprecated": [true, { "severity": "warning" }],
+    "property-no-deprecated": [true, { "severity": "warning" }],
+    "selector-class-pattern": null,
+    "selector-id-pattern": null,
+    "custom-property-pattern": null,
+    "custom-property-empty-line-before": null,
+    "declaration-block-no-redundant-longhand-properties": null,
+    "declaration-empty-line-before": null,
+    "shorthand-property-no-redundant-values": null,
+    "rule-empty-line-before": null,
+    "value-keyword-case": null,
+    "keyframes-name-pattern": null,
+    "color-function-notation": null,
+    "color-function-alias-notation": null,
+    "color-hex-length": null,
+    "alpha-value-notation": null,
+    "media-feature-range-notation": null,
+    "font-family-name-quotes": null,
+    "property-no-vendor-prefix": null
+  }
+}

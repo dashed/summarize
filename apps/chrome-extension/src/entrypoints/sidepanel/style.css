@@ -2777,7 +2777,6 @@ button.setup__pill.isActive {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  flex-shrink: 0;
 }
 
 .historyTitle {
