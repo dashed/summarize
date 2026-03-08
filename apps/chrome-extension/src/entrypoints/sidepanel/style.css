@@ -654,7 +654,7 @@ header {
   padding: 0;
   margin: -1px;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
   border: 0;
   white-space: nowrap;
 }
@@ -1508,14 +1508,6 @@ input[type="range"] {
   width: 100%;
 }
 
-.drawerFooter {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  margin-top: 10px;
-}
-
 .progress {
   position: absolute;
   left: 50%;
@@ -1690,7 +1682,7 @@ main {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .error__actions {
@@ -1781,7 +1773,6 @@ button.setup__pill.isActive {
   padding-right: 48px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .setup__copy {
@@ -1915,7 +1906,7 @@ button.setup__pill.isActive {
 
 .raw {
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* Chat styles */
@@ -1950,7 +1941,7 @@ button.setup__pill.isActive {
   border-radius: 12px;
   line-height: var(--line-height, 1.45);
   max-width: 88%;
-  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .chatMessage.user {
@@ -2077,7 +2068,6 @@ button.setup__pill.isActive {
   border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
 }
 
 .chatMessage pre code {
@@ -2487,7 +2477,7 @@ button.setup__pill.isActive {
   font-size: 13px;
   line-height: 1.4;
   color: var(--text);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .inlineError__actions {
@@ -3004,7 +2994,7 @@ button.setup__pill.isActive {
   background: var(--bg0);
   border-top: 1px solid var(--border);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   max-height: 300px;
   overflow-y: auto;
   border-radius: 0 0 6px 6px;
