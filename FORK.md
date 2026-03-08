@@ -2,7 +2,7 @@
 
 Fork of [steipete/summarize](https://github.com/steipete/summarize) focused on **YouTube/video multimodal support**, **Gemini reasoning tokens**, **PDF extraction**, **KaTeX math rendering**, and **Chrome extension UX improvements**.
 
-**Version:** `0.11.2-fork` (43 commits ahead of upstream)
+**Version:** `0.11.2-fork` (52 commits ahead of upstream)
 
 ---
 
@@ -69,6 +69,9 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Chat extraction status** — Shows correct status label for non-video pages (e.g. "Page" instead of "Video") in chat extraction panel
 - **Abort on tab switch** — SSE stream aborted when tab/URL changes to prevent stale content
 - **Auto-restore on tab switch back** — When switching back to a tab that had an in-progress summarization, the extension reconnects to the daemon's SSE replay endpoint to restore the completed summary without requiring a manual Summarize click. Panel cache is saved before aborting streams so the `runId`, elapsed timer, and progress bar position are preserved across tab switches
+- **Auto-compacting header controls** — Refresh button, length picker, and model badge promoted to header controls row so they're always visible. Text labels auto-collapse via CSS flex when the sidepanel is narrow
+- **Restore from daemon history** — When the background service worker recycles or the extension restarts and the in-memory panel cache is lost, summaries restore from the daemon's history API (`/v1/history/summaries?url=...`), mirroring the existing chat restore pattern
+- **Secure automation bridge** — Automation REPL and user-script request handling refactored with input validation and security hardening
 
 **Key files:**
 
@@ -77,6 +80,8 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - `apps/chrome-extension/src/entrypoints/sidepanel/style.css` — UI styling
 - `apps/chrome-extension/src/entrypoints/sidepanel/panel-cache.ts` — `resolveRestoreAction()` for tab-switch restore decisions
 - `apps/chrome-extension/src/entrypoints/sidepanel/pickers.tsx` — Mode display on button
+- `apps/chrome-extension/src/lib/history.ts` — `canonicalizeUrlForHistory()`, `parseSummaryHistoryMeta()`
+- `apps/chrome-extension/src/automation/user-script-requests.ts` — Secure automation bridge
 
 ---
 
@@ -118,15 +123,22 @@ Auto-enables reasoning/thinking tokens for Gemini thinking models across all LLM
 - **Summary history API** — `GET /v1/history/summaries` lists cached summaries (metadata only), `GET /v1/history/summaries/:key` returns full summary text. Accepts `?url=` query param to filter by URL
 - **Chat session persistence** — `POST /v1/agent/history/save` persists chat messages to SQLite with metadata (url, title, model, messageCount). `POST /v1/agent/history` loads chat sessions back (was previously unimplemented, returning 404)
 - **Chat history listing** — `GET /v1/history/chats` lists saved chat sessions. Accepts `?url=` query param to filter by URL
+- **Chat history entry loading** — `GET /v1/history/chats/:key` returns full chat messages with metadata. Clicking on a chat entry in the history panel loads the conversation into the chat view
+- **Chat history URL-based fallback** — When a chat's content fingerprint changes between page loads (e.g. different PDF extraction), the daemon falls back to URL-based lookup via `listEntries("chat", { filterUrl })` to find the most recent chat for that URL
 - **History panel UI** — Clock icon button in sidepanel header opens a history panel with Summaries/Chats tabs, scrollable list of past entries with title, date, model badge, and char count. Click to load a previous summary. Filtered to current tab's URL
+- **History panel UX improvements** — Message count display for chats (e.g. "5 messages" instead of raw byte count), summary/chat banners with date and "Back to current" dismiss, contextual chat placeholder (video/PDF/page), close button, URL subtitle showing current domain, preview text (markdown-stripped first 120 chars), delete button per entry
+- **History deletion** — `DELETE /v1/history/summaries/:key` and `DELETE /v1/history/chats/:key` endpoints. `deleteEntry()` method added to `CacheStore` exposing the internal `stmtDelete` prepared statement
 - **URL-filtered history** — History entries filtered by current tab URL using `LIKE` prefix matching on `json_extract(metadata, '$.url')`. YouTube URLs canonicalized (strip `t=`, `si=` params) so different visits to the same video match
 - **Auto-save chat to daemon** — Chat sessions auto-saved to daemon SQLite (fire-and-forget) after each assistant response, surviving browser restarts
 
 **Key files:**
 
-- `src/cache.ts` — `listEntries()`, `getEntryWithMeta()`, `CacheEntryInfo` type
-- `src/daemon/server.ts` — History and chat persistence endpoints
-- `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — History panel logic, chat save
+- `src/cache.ts` — `listEntries()`, `getEntryWithMeta()`, `deleteEntry()`, `CacheEntryInfo` type
+- `src/daemon/server.ts` — History and chat persistence endpoints, DELETE handlers
+- `src/daemon/history.ts` — `buildChatHistoryKey()` for deterministic chat key generation
+- `src/shared/history.ts` — Shared URL canonicalization utilities
+- `apps/chrome-extension/src/entrypoints/sidepanel/main.ts` — History panel logic, chat save, banners
+- `apps/chrome-extension/src/entrypoints/sidepanel/history-utils.ts` — Pure utility functions: `resolveCurrentKey`, `formatHistoryEntrySize`, `detectContentTypeLabel`, `extractDomain`, `generatePreview`
 - `apps/chrome-extension/src/entrypoints/sidepanel/index.html` — History button and panel HTML
 - `apps/chrome-extension/src/entrypoints/sidepanel/style.css` — History panel styles
 
@@ -180,7 +192,7 @@ LaTeX math expressions in summaries and chat responses are rendered using KaTeX 
 
 ## Commits
 
-43 commits ahead of upstream, oldest to newest:
+52 commits ahead of upstream, oldest to newest:
 
 | #   | Hash      | Subject                                                                           | Area              |
 | --- | --------- | --------------------------------------------------------------------------------- | ----------------- |
@@ -227,12 +239,21 @@ LaTeX math expressions in summaries and chat responses are rendered using KaTeX 
 | 41  | `1cc6d9a` | test: extract chat status label into testable function with 4 tests               | Tests             |
 | 42  | `f19833d` | feat: add PDF text extraction support for URL summarization                       | Content           |
 | 43  | `5e852e1` | feat: add KaTeX math rendering for $...$ and $$...$$ in sidepanel                 | Extension UX      |
+| 44  | `86b57e8` | feat: promote refresh, length, and model to header with auto-compacting labels    | Extension UX      |
+| 45  | `82d68f2` | fix: restore summary from daemon history when panel cache is lost                 | Extension Fix     |
+| 46  | `7760900` | fix: secure extension automation bridge                                           | Security          |
+| 47  | `d06ef25` | chore: commit remaining workspace changes                                         | Chore             |
+| 48  | `12dcf51` | fix: harden extension history and quality gates                                   | History Fix       |
+| 49  | `5e93a64` | fix: chat history fallback and history panel refresh on tab switch                | History Fix       |
+| 50  | `d8cb57b` | feat: add chat history entry endpoint and loading from history panel              | History           |
+| 51  | `46a5e3a` | feat: keep history panel open and show banner when viewing saved chats            | History           |
+| 52  | `7ee4fd1` | feat: history panel UX improvements with tests                                    | History           |
 
 ---
 
 ## Test Coverage
 
-Test code added across 24 test files:
+Test code added across 30 test files:
 
 - `tests/chrome.cookies.test.ts` — Chrome cookie export
 - `tests/slides.build-yt-dlp-cookies-args.test.ts` — yt-dlp cookie args
@@ -255,12 +276,16 @@ Test code added across 24 test files:
 - `tests/chrome-extension/progress-stages.test.ts` — Progress stage resolution
 - `tests/sidepanel.panel-cache.test.ts` — Panel cache controller and tab-switch restore logic
 - `tests/cache.list-entries.test.ts` — Cache listEntries and getEntryWithMeta
-- `tests/daemon.history-api.test.ts` — History API endpoint cache operations
+- `tests/daemon.history-api.test.ts` — History API endpoint cache operations (32 tests)
 - `tests/video-detail-level.test.ts` — VideoDetailLevel prompt switching (32 tests)
-- `tests/sidepanel.history-utils.test.ts` — History current-indicator resolution logic (18 tests)
+- `tests/sidepanel.history-utils.test.ts` — History panel utility functions (64 tests)
 - `tests/sidepanel.header-controller.test.ts` — Header controller progress get/set/reset (5 tests)
+- `tests/sidepanel.chat-history-store.test.ts` — Chat history store persistence (3 tests)
 - `tests/chrome-extension.extract-status.test.ts` — Chat extraction status label logic (4 tests)
+- `tests/chrome.history.test.ts` — URL canonicalization and summary metadata parsing (11 tests)
+- `tests/chrome.user-script-requests.test.ts` — Automation bridge security (107 tests)
 - `tests/link-preview.fetcher.pdf.test.ts` — PDF content-type detection and text extraction (10 tests)
+- `apps/chrome-extension/tests/native-input.security.spec.ts` — Native input security (Playwright)
 
 ## Architecture Decisions
 
@@ -277,3 +302,5 @@ Test code added across 24 test files:
 11. **Video detail level toggle** — Separates "summary" vs "detailed" video modes in the prompt rather than relying on length presets alone. Short length + detailed extraction creates contradictory instructions (900-char limit vs "cover ENTIRE video with timestamps every 1-2 min"); the toggle cleanly separates these concerns
 12. **PDF fallback chain** — On `application/pdf` content-type error, try native text extraction via `unpdf` first (zero external dependencies, fast). If extraction fails (image-only PDF, encrypted, malformed), fall through to Firecrawl. This avoids blocking PDFs entirely while keeping Firecrawl as a robust fallback
 13. **KaTeX via markdown-it plugin** — Renders LaTeX math in the sidepanel using `@traptitech/markdown-it-katex` as a markdown-it plugin, matching system prompt instructions that tell models to emit `$...$` / `$$...$$` notation. Plugin chosen over manual regex because it handles edge cases (nested delimiters, escaping) correctly
+14. **Chat history URL-based fallback** — Chat sessions are keyed by URL+content fingerprint hash for precision, but when content changes between loads (common with PDF re-extraction), the daemon falls back to `listEntries("chat", { filterUrl })` to find the most recent chat for that URL. This prevents "lost" chats when page content shifts slightly
+15. **History panel pure utilities** — All history panel logic that can be tested without DOM (key resolution, content type detection, preview generation, entry formatting) extracted to `history-utils.ts` as pure functions with 64 unit tests
