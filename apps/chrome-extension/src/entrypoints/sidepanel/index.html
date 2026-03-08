@@ -204,6 +204,13 @@
         <button id="summaryHistoryBannerDismiss" type="button" class="ghost small" aria-label="Return to current summary">Back to current</button>
       </div>
       <article id="render" class="render"></article>
+      <details id="systemPromptSection" class="systemPromptSection hidden">
+        <summary class="systemPromptToggle">
+          <svg class="systemPromptChevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+          System Prompt
+        </summary>
+        <pre id="systemPromptContent" class="systemPromptContent"></pre>
+      </details>
       <pre id="raw" class="raw hidden"></pre>
 
       <div id="metricsHome">
@@ -215,6 +222,13 @@
           <span id="chatHistoryBannerText"></span>
           <button id="chatHistoryBannerDismiss" type="button" class="ghost small" aria-label="Return to current chat">Back to current</button>
         </div>
+        <details id="chatSystemPromptSection" class="systemPromptSection hidden">
+          <summary class="systemPromptToggle">
+            <svg class="systemPromptChevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+            Chat System Prompt
+          </summary>
+          <pre id="chatSystemPromptContent" class="systemPromptContent"></pre>
+        </details>
         <div id="chatMessages" class="chatMessages isHidden"></div>
         <div id="chatContextStatus" class="chatContextStatus isHidden"></div>
         <div id="automationNotice" class="automationNotice hidden" role="status" aria-live="polite">

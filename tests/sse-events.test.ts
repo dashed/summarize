@@ -25,6 +25,7 @@ describe("sse events", () => {
           detailsDetailed: null,
         },
       },
+      { event: "systemPrompt", data: { systemPrompt: "You are a helpful assistant." } },
       { event: "done", data: {} },
       { event: "error", data: { message: "Boom" } },
     ];

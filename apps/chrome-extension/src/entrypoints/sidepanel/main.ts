@@ -106,6 +106,7 @@ type BgToPanel =
   | { type: "slides:run"; ok: boolean; runId?: string; url?: string; error?: string }
   | { type: "chat:history"; requestId: string; ok: boolean; messages?: Message[]; error?: string }
   | { type: "agent:chunk"; requestId: string; text: string }
+  | { type: "agent:systemPrompt"; requestId: string; systemPrompt: string }
   | {
       type: "agent:response";
       requestId: string;
@@ -227,6 +228,11 @@ const historyListEl = byId<HTMLDivElement>("historyList");
 const historyEmptyEl = byId<HTMLDivElement>("historyEmpty");
 const historyTabSummariesBtn = byId<HTMLButtonElement>("historyTabSummaries");
 const historyTabChatsBtn = byId<HTMLButtonElement>("historyTabChats");
+
+const systemPromptSectionEl = byId<HTMLDetailsElement>("systemPromptSection");
+const systemPromptContentEl = byId<HTMLPreElement>("systemPromptContent");
+const chatSystemPromptSectionEl = byId<HTMLDetailsElement>("chatSystemPromptSection");
+const chatSystemPromptContentEl = byId<HTMLPreElement>("chatSystemPromptContent");
 
 const chatContainerEl = byId<HTMLElement>("chatContainer");
 const chatMessagesEl = byId<HTMLDivElement>("chatMessages");
@@ -589,6 +595,10 @@ function handleAgentChunk(msg: Extract<BgToPanel, { type: "agent:chunk" }>) {
   const pending = pendingAgentRequests.get(msg.requestId);
   if (!pending?.onChunk) return;
   pending.onChunk(msg.text);
+}
+
+function handleAgentSystemPrompt(msg: Extract<BgToPanel, { type: "agent:systemPrompt" }>) {
+  showChatSystemPrompt(msg.systemPrompt);
 }
 
 function handleChatHistoryResponse(msg: Extract<BgToPanel, { type: "chat:history" }>) {
@@ -1163,6 +1173,7 @@ function resetSummaryView({
   if (stopSlides) {
     stopSlidesStream();
   }
+  hideSystemPrompt();
   refreshSummarizeControl();
   if (!preserveChat) {
     resetChatState();
@@ -2583,6 +2594,62 @@ function updateChatPlaceholder() {
   chatInputEl.placeholder = `Ask about this ${label}\u2026`;
 }
 
+function showSystemPrompt(prompt: string | null | undefined) {
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    systemPromptSectionEl.classList.add("hidden");
+    systemPromptContentEl.textContent = "";
+    return;
+  }
+  systemPromptContentEl.textContent = prompt;
+  systemPromptSectionEl.classList.remove("hidden");
+}
+
+function hideSystemPrompt() {
+  systemPromptSectionEl.classList.add("hidden");
+  systemPromptSectionEl.removeAttribute("open");
+  systemPromptContentEl.textContent = "";
+}
+
+function showChatSystemPrompt(prompt: string | null | undefined) {
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    chatSystemPromptSectionEl.classList.add("hidden");
+    chatSystemPromptContentEl.textContent = "";
+    return;
+  }
+  chatSystemPromptContentEl.textContent = prompt;
+  chatSystemPromptSectionEl.classList.remove("hidden");
+}
+
+function hideChatSystemPrompt() {
+  chatSystemPromptSectionEl.classList.add("hidden");
+  chatSystemPromptSectionEl.removeAttribute("open");
+  chatSystemPromptContentEl.textContent = "";
+}
+
+async function fetchSystemPromptForCurrentSummary() {
+  const url = panelState.currentSource?.url ?? activeTabUrl;
+  if (!url) return;
+  const canonical = canonicalizeUrlForHistory(url);
+  if (!canonical) return;
+  const token = await getAuthToken();
+  if (!token) return;
+  try {
+    const res = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&match=canonical&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = (await res.json()) as { ok?: boolean; summaries?: Array<{ key: string; metadata?: Record<string, unknown> }> };
+    if (!data.ok || !data.summaries?.length) return;
+    const entry = data.summaries[0];
+    const sp = entry.metadata?.systemPrompt;
+    if (typeof sp === "string" && sp.trim()) {
+      showSystemPrompt(sp);
+    }
+  } catch {
+    // ignore — system prompt display is best-effort
+  }
+}
+
 function applyChatEnabled() {
   chatContainerEl.toggleAttribute("hidden", !chatEnabledValue);
   chatDockEl.toggleAttribute("hidden", !chatEnabledValue);
@@ -2883,13 +2950,15 @@ async function restoreSummaryFromHistory(url: string) {
     }
     console.log("[restoreSummary] rendering summary, length:", detailData.value.length);
     renderMarkdown(detailData.value);
-    const { title, model } = parseSummaryHistoryMeta(detailData.metadata ?? entry.metadata);
+    const meta = detailData.metadata ?? entry.metadata;
+    const { title, model } = parseSummaryHistoryMeta(meta);
     // Mark currentSource so updateControls doesn't overwrite our header on the next ui:state.
     panelState.currentSource = { url, title };
     headerController.setBaseTitle(title);
     headerController.setBaseSubtitle("");
     panelState.lastMeta = { ...panelState.lastMeta, model };
     updateModelBadge();
+    showSystemPrompt(meta?.systemPrompt as string | undefined);
     setPhase("idle");
   } catch (err) {
     console.warn("[restoreSummary] error:", err);
@@ -3426,6 +3495,7 @@ const streamController = createStreamController({
         rebuildSlideDescriptions();
         queueSlidesRender();
       }
+      void fetchSystemPromptForCurrentSummary();
     }
   },
   onRememberUrl: (url) => void send({ type: "panel:rememberUrl", url }),
@@ -4152,6 +4222,9 @@ function handleBgMessage(msg: BgToPanel) {
     case "agent:chunk":
       handleAgentChunk(msg);
       return;
+    case "agent:systemPrompt":
+      handleAgentSystemPrompt(msg);
+      return;
     case "agent:response":
       handleAgentResponse(msg);
       return;
@@ -4470,6 +4543,7 @@ async function loadHistoryEntry(key: string, mode: string) {
           : "";
         summaryHistoryBannerTextEl.textContent = `Viewing saved summary${dateStr ? ` \u00b7 ${dateStr}` : ""}`;
         summaryHistoryBannerEl.classList.remove("hidden");
+        showSystemPrompt(data.metadata?.systemPrompt as string | undefined);
         historyOpen = false;
         historyPanelEl.classList.add("hidden");
         historyToggleBtn.classList.remove("isActive");
@@ -4514,6 +4588,7 @@ async function loadHistoryEntry(key: string, mode: string) {
           const msgCount = data.metadata?.messageCount ?? parsed.length;
           chatHistoryBannerTextEl.textContent = `Viewing saved chat \u00b7 ${dateStr} \u00b7 ${msgCount} messages`;
           chatHistoryBannerEl.classList.remove("hidden");
+          showChatSystemPrompt(data.metadata?.systemPrompt as string | undefined);
           updateChatPlaceholder();
           void loadHistory();
         }
@@ -4545,6 +4620,7 @@ historyCloseBtn.addEventListener("click", () => {
 summaryHistoryBannerDismissBtn.addEventListener("click", () => {
   loadedHistoryKey = null;
   summaryHistoryBannerEl.classList.add("hidden");
+  hideSystemPrompt();
   if (activeTabId && activeTabUrl) {
     const cached = panelCacheController.resolve(activeTabId, activeTabUrl);
     if (cached) {
@@ -4557,6 +4633,8 @@ summaryHistoryBannerDismissBtn.addEventListener("click", () => {
 chatHistoryBannerDismissBtn.addEventListener("click", () => {
   loadedChatHistoryKey = null;
   chatHistoryBannerEl.classList.add("hidden");
+  hideSystemPrompt();
+  hideChatSystemPrompt();
   resetChatState();
   void restoreChatHistory();
   if (historyOpen) void loadHistory();
@@ -4663,6 +4741,7 @@ function resetChatState() {
   lastNavigationMessageUrl = null;
   loadedChatHistoryKey = null;
   chatHistoryBannerEl.classList.add("hidden");
+  hideChatSystemPrompt();
   updateChatPlaceholder();
 }
 

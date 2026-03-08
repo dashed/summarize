@@ -65,6 +65,16 @@ export function buildAgentPromptHash(automationEnabled: boolean): string {
   return buildPromptHash(automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY);
 }
 
+/**
+ * Returns just the base agent system prompt template (without page content).
+ * Used for storing in chat metadata so the UI can display what prompt was used.
+ */
+export function getAgentBaseSystemPrompt(automationEnabled: boolean, hasTimestamps: boolean): string {
+  const base = automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY;
+  const timestampBlock = hasTimestamps ? TIMESTAMP_INSTRUCTION : "";
+  return `${base}${timestampBlock}`.trim();
+}
+
 const TOOL_DEFINITIONS: Record<string, Tool> = {
   navigate: {
     name: "navigate",

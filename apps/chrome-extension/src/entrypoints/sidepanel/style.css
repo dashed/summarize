@@ -2959,6 +2959,58 @@ button.setup__pill.isActive {
   font-style: italic;
 }
 
+/* System prompt collapsible section */
+.systemPromptSection {
+  margin: 8px 16px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.systemPromptToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.systemPromptToggle::-webkit-details-marker {
+  display: none;
+}
+
+.systemPromptChevron {
+  width: 14px;
+  height: 14px;
+  fill: var(--muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.systemPromptSection[open] .systemPromptChevron {
+  transform: rotate(90deg);
+}
+
+.systemPromptContent {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg0);
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  border-radius: 0 0 6px 6px;
+}
+
 .hidden {
   display: none;
 }

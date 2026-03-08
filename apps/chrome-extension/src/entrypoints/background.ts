@@ -1912,6 +1912,12 @@ export default defineBackground(() => {
                   requestId: agentPayload.requestId,
                   text: event.text,
                 });
+              } else if (event.type === "systemPrompt") {
+                void send(session, {
+                  type: "agent:systemPrompt",
+                  requestId: agentPayload.requestId,
+                  systemPrompt: event.systemPrompt,
+                });
               } else if (event.type === "assistant") {
                 sawAssistant = true;
                 void send(session, {

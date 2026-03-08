@@ -21,7 +21,7 @@ import { buildHistoryUrlMetadata } from "../shared/history.js";
 import { encodeSseEvent, type SseEvent, type SseSlidesData } from "../shared/sse-events.js";
 import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js";
 import { resolveGitSha, resolvePackageVersion } from "../version.js";
-import { completeAgentResponse, streamAgentResponse } from "./agent.js";
+import { completeAgentResponse, getAgentBaseSystemPrompt, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
 import { buildChatHistoryKey } from "./history.js";
@@ -1349,6 +1349,14 @@ export async function runDaemonServer({
         };
 
         try {
+          // Emit the base system prompt so the panel can show it in the chat UI.
+          const pcStr = typeof pageContent === "string" ? pageContent : "";
+          const hasTs = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pcStr);
+          writeEvent({
+            event: "systemPrompt",
+            data: { systemPrompt: getAgentBaseSystemPrompt(automationEnabled, hasTs) },
+          });
+
           await runWithProcessContext({ runId, source: "agent" }, async () =>
             streamAgentResponse({
               env,
@@ -1781,6 +1789,8 @@ export async function runDaemonServer({
         const preview = typeof lastUserMsg?.content === "string"
           ? (lastUserMsg.content as string).slice(0, 120)
           : null;
+        const pcStr = typeof pageContent === "string" ? pageContent : "";
+        const hasTimestamps = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pcStr);
         const metadata = {
           url: String(bodyUrl),
           historyUrl: buildHistoryUrlMetadata(String(bodyUrl)),
@@ -1788,6 +1798,7 @@ export async function runDaemonServer({
           model: model ?? null,
           messageCount: messages.length,
           preview,
+          systemPrompt: getAgentBaseSystemPrompt(!!automationEnabled, hasTimestamps),
         };
         store.setJson("chat", key, messages, cacheState.ttlMs, metadata);
         json(res, 200, { ok: true }, cors);

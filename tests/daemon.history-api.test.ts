@@ -730,6 +730,73 @@ describe("DELETE /v1/history/chats/:key (cache layer)", () => {
   });
 });
 
+describe("systemPrompt in cache metadata", () => {
+  it("stores and retrieves systemPrompt in summary metadata", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "sp-test", "# Summary", null, {
+      url: "https://example.com",
+      model: "gpt-4o",
+      summaryChars: 100,
+      systemPrompt: "You are a content extraction engine.",
+      prompt: "Summarize this article.",
+    });
+
+    const entry = store.getEntryWithMeta("summary", "sp-test");
+    expect(entry).not.toBeNull();
+    expect(entry!.metadata?.systemPrompt).toBe("You are a content extraction engine.");
+    expect(entry!.metadata?.prompt).toBe("Summarize this article.");
+
+    store.close();
+  });
+
+  it("stores and retrieves systemPrompt in chat metadata", async () => {
+    const store = await makeTempStore();
+
+    const key = buildChatKey({ url: "https://example.com", automationEnabled: false, cacheContent: "text" });
+    store.setJson("chat", key, [{ role: "user", content: "hello" }], null, {
+      url: "https://example.com",
+      messageCount: 1,
+      systemPrompt: "You are Summarize Chat, not Claude.\n\n# Purpose\nAnswer questions about the current page content.",
+    });
+
+    const entry = store.getEntryWithMeta("chat", key);
+    expect(entry).not.toBeNull();
+    expect(entry!.metadata?.systemPrompt).toContain("Summarize Chat");
+
+    store.close();
+  });
+
+  it("returns systemPrompt in list entries metadata", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "sp-list", "# Summary", null, {
+      url: "https://example.com",
+      systemPrompt: "System prompt content here",
+    });
+
+    const entries = store.listEntries("summary");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].metadata?.systemPrompt).toBe("System prompt content here");
+
+    store.close();
+  });
+
+  it("handles missing systemPrompt gracefully", async () => {
+    const store = await makeTempStore();
+
+    store.setText("summary", "no-sp", "# Summary", null, {
+      url: "https://example.com",
+    });
+
+    const entry = store.getEntryWithMeta("summary", "no-sp");
+    expect(entry).not.toBeNull();
+    expect(entry!.metadata?.systemPrompt).toBeUndefined();
+
+    store.close();
+  });
+});
+
 describe("e2e: chat history save → reload with different content → fallback load", () => {
   /**
    * Simulates the exact flow that happens in the daemon server:
