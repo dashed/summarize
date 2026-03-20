@@ -1,5 +1,6 @@
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
 import { extractYouTubeVideoId, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
+import { logDiagnostic } from "../../lib/diagnostics";
 import { SUMMARY_LENGTH_SPECS } from "@steipete/summarize-core/prompts";
 import katexPlugin from "@traptitech/markdown-it-katex";
 import MarkdownIt from "markdown-it";
@@ -3850,6 +3851,7 @@ function updateControls(state: UiState) {
   const nextVideoLabel = state.media?.hasAudio && !state.media.hasVideo ? "Audio" : "Video";
 
   if (tabChanged) {
+    logDiagnostic("panel", "tab-changed", { previousTabId: activeTabId, nextTabId, previousUrl: activeTabUrl, nextUrl: nextTabUrl }, { url: nextTabUrl ?? undefined, tabId: nextTabId ?? undefined });
     const initialTabHydration = activeTabId === null && nextTabId !== null && hasActiveChat;
     const preserveChat = initialTabHydration || isRecentAgentNavigation(nextTabId, nextTabUrl);
     if (preserveChat) {
@@ -3896,6 +3898,7 @@ function updateControls(state: UiState) {
       resetSummaryView({ preserveChat });
     }
   } else if (urlChanged) {
+    logDiagnostic("panel", "url-changed", { previousUrl: activeTabUrl, nextUrl: nextTabUrl, tabId: activeTabId }, { url: nextTabUrl ?? undefined, tabId: activeTabId ?? undefined });
     const previousTabUrl = activeTabUrl;
     activeTabUrl = nextTabUrl;
     const initialUrlHydration = previousTabUrl === null && nextTabUrl !== null && hasActiveChat;
@@ -4258,6 +4261,7 @@ async function send(message: PanelToBg) {
 }
 
 function sendSummarize(opts?: { refresh?: boolean }) {
+  logDiagnostic("panel", "summarize-clicked", { refresh: Boolean(opts?.refresh), activeTabUrl, activeTabId, currentSourceUrl: panelState.currentSource?.url ?? null }, { url: activeTabUrl ?? undefined, tabId: activeTabId ?? undefined });
   errorController.clearInlineError();
   void send({
     type: "panel:summarize",

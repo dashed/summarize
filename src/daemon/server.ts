@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import type { CacheState } from "../cache.js";
+import { openSqlite } from "../cache.js";
 import type { VideoDetailLevel } from "../prompts/index.js";
 import type { SlideExtractionResult, SlideSettings } from "../slides/index.js";
 import type { DaemonConfig } from "./config.js";
@@ -23,6 +24,7 @@ import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js"
 import { resolveGitSha, resolvePackageVersion } from "../version.js";
 import { completeAgentResponse, getAgentBaseSystemPrompt, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
+import { type DiagnosticEvent, type DiagnosticsStore, createDiagnosticsStore } from "./diagnostics.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
 import { buildChatHistoryKey } from "./history.js";
 import { resolveDaemonLogPaths } from "./launchd.js";
@@ -146,7 +148,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
     "access-control-allow-headers": "authorization, content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
     // Chrome Private Network Access (PNA): allow requests to localhost from secure contexts.
     // Without this, extensions often fail with a generic "Failed to fetch".
     "access-control-allow-private-network": "true",
@@ -492,6 +494,19 @@ export async function runDaemonServer({
     noMediaCacheFlag: false,
   });
 
+  let diagnosticsStore: DiagnosticsStore | null = null;
+  if (cacheState.path) {
+    try {
+      const diagDb = await openSqlite(cacheState.path);
+      diagDb.exec("PRAGMA journal_mode=WAL");
+      diagDb.exec("PRAGMA synchronous=NORMAL");
+      diagDb.exec("PRAGMA busy_timeout=5000");
+      diagnosticsStore = createDiagnosticsStore(diagDb);
+    } catch {
+      // Diagnostics are best-effort; ignore errors
+    }
+  }
+
   const processRegistry = new ProcessRegistry();
   setProcessObserver(processRegistry.createObserver());
 
@@ -594,6 +609,86 @@ export async function runDaemonServer({
           },
           cors,
         );
+        return;
+      }
+
+      // ── Diagnostics endpoints ──────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(req, 512_000);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          json(res, 400, { ok: false, error: message }, cors);
+          return;
+        }
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "invalid json" }, cors);
+          return;
+        }
+        const obj = body as Record<string, unknown>;
+        if (Array.isArray(obj.events)) {
+          const events = obj.events as DiagnosticEvent[];
+          diagnosticsStore.logBatch(events);
+          json(res, 200, { ok: true, count: events.length }, cors);
+        } else if (typeof obj.event === "string" && typeof obj.source === "string") {
+          diagnosticsStore.log(obj as unknown as DiagnosticEvent);
+          json(res, 200, { ok: true, count: 1 }, cors);
+        } else {
+          json(res, 400, { ok: false, error: "missing events array or event+source fields" }, cors);
+        }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        const limit = clampNumber(
+          Number(url.searchParams.get("limit") ?? "100"),
+          1,
+          1000,
+        );
+        const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
+        const event = url.searchParams.get("event") || undefined;
+        const source = url.searchParams.get("source") || undefined;
+        const urlFilter = url.searchParams.get("url") || undefined;
+        const since = url.searchParams.has("since")
+          ? Number(url.searchParams.get("since"))
+          : undefined;
+        const until = url.searchParams.has("until")
+          ? Number(url.searchParams.get("until"))
+          : undefined;
+        const events = diagnosticsStore.query({
+          limit,
+          offset,
+          event,
+          source,
+          url: urlFilter,
+          since,
+          until,
+        });
+        const total = diagnosticsStore.count();
+        json(res, 200, { ok: true, events, total }, cors);
+        return;
+      }
+
+      if (req.method === "DELETE" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+        const olderThanMs = url.searchParams.has("olderThanMs")
+          ? Number(url.searchParams.get("olderThanMs"))
+          : SEVEN_DAYS_MS;
+        const deleted = diagnosticsStore.purge(olderThanMs);
+        json(res, 200, { ok: true, deleted }, cors);
         return;
       }
 

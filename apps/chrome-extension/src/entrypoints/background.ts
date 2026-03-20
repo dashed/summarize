@@ -14,6 +14,7 @@ import { buildChatPageContent } from "../lib/chat-context";
 import { exportYouTubeCookies } from "../lib/cookies";
 import { buildDaemonRequestBody, buildSummarizeRequestBody } from "../lib/daemon-payload";
 import { createDaemonRecovery, isDaemonUnreachableError } from "../lib/daemon-recovery";
+import { logDiagnostic, setDiagnosticsToken } from "../lib/diagnostics";
 import { logExtensionEvent } from "../lib/extension-logs";
 import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { loadSettings, patchSettings } from "../lib/settings";
@@ -1169,6 +1170,7 @@ export default defineBackground(() => {
     if (!isPanelOpen(session)) return;
 
     const settings = await loadSettings();
+    setDiagnosticsToken(settings.token?.trim() || null);
     const isManual = reason === "manual" || reason === "refresh" || reason === "length-change";
     if (!isManual && !settings.autoSummarize) return;
     if (!settings.token.trim()) {
@@ -1197,6 +1199,15 @@ export default defineBackground(() => {
 
     const tab = await getActiveTab(session.windowId);
     if (!tab?.id || !canSummarizeUrl(tab.url)) return;
+
+    logDiagnostic("background", "summarize-start", {
+      reason,
+      tabUrl: tab.url,
+      tabId: tab.id,
+      lastSummarizedUrl: session.lastSummarizedUrl ?? null,
+      inflightUrl: session.inflightUrl ?? null,
+      isManual,
+    }, { url: tab.url ?? undefined, tabId: tab.id });
 
     session.runController?.abort();
     const controller = new AbortController();
@@ -1349,6 +1360,13 @@ export default defineBackground(() => {
     }
 
     const extractedMatchesTab = tab.url && extracted.url ? urlsMatch(tab.url, extracted.url) : true;
+    logDiagnostic("background", "extract-resolved", {
+      reason,
+      tabUrl: tab.url,
+      extractedUrl: extracted.url,
+      extractedMatchesTab,
+      textLength: extracted.text?.length ?? 0,
+    }, { url: tab.url ?? undefined, tabId: tab.id });
     const resolvedExtracted =
       tab.url && !extractedMatchesTab
         ? {
@@ -2412,8 +2430,12 @@ export default defineBackground(() => {
       const session = getPanelSession(windowId);
       if (!session) return;
       const now = Date.now();
-      if (now - session.lastNavAt < 700) return;
+      if (now - session.lastNavAt < 700) {
+        logDiagnostic("background", "spa-nav-debounced", { url: details.url, tabId: details.tabId, elapsed: now - session.lastNavAt }, { url: details.url, tabId: details.tabId });
+        return;
+      }
       session.lastNavAt = now;
+      logDiagnostic("background", "spa-nav", { url: details.url, tabId: details.tabId, previousUrl: session.lastSummarizedUrl ?? null }, { url: details.url, tabId: details.tabId });
       void emitState(session, "");
       void summarizeActiveTab(session, "spa-nav");
     })();
@@ -2435,9 +2457,11 @@ export default defineBackground(() => {
       void emitState(session, "");
     }
     if (typeof changeInfo.url === "string") {
+      logDiagnostic("background", "tab-url-change", { url: changeInfo.url, tabId: tab.id, previousUrl: session.lastSummarizedUrl ?? null }, { url: changeInfo.url, tabId: tab.id ?? undefined });
       void summarizeActiveTab(session, "tab-url-change");
     }
     if (changeInfo.status === "complete") {
+      logDiagnostic("background", "tab-load-complete", { url: tab.url, tabId: tab.id }, { url: tab.url ?? undefined, tabId: tab.id ?? undefined });
       void emitState(session, "");
       void summarizeActiveTab(session, "tab-updated");
     }

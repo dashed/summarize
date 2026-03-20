@@ -25,7 +25,7 @@ type SqliteStatement = {
   run: (...args: unknown[]) => { changes?: number } | unknown;
 };
 
-type SqliteDatabase = {
+export type SqliteDatabase = {
   exec: (sql: string) => void;
   prepare: (sql: string) => SqliteStatement;
   close?: () => void;
@@ -143,7 +143,7 @@ const installSqliteWarningFilter = () => {
   }) as typeof process.emitWarning;
 };
 
-async function openSqlite(path: string): Promise<SqliteDatabase> {
+export async function openSqlite(path: string): Promise<SqliteDatabase> {
   if (isBun) {
     const mod = (await import("bun:sqlite")) as { Database: new (path: string) => SqliteDatabase };
     return new mod.Database(path);
