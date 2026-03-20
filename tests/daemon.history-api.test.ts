@@ -489,6 +489,71 @@ describe("POST /v1/agent/history fallback (URL-based lookup when content key mis
     store.close();
   });
 
+  it("canonical filterMode does not match URL prefixes (e.g. /article vs /article-part-2)", async () => {
+    const store = await makeTempStore();
+
+    // Save chat for /article
+    const articleUrl = "https://example.com/article";
+    const articleKey = buildChatKey({
+      url: articleUrl,
+      automationEnabled: false,
+      cacheContent: "Article one content",
+    });
+    store.setJson("chat", articleKey, [{ role: "user", content: "about article 1" }], null, {
+      url: articleUrl,
+      historyUrl: articleUrl,
+      title: "Article",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Save chat for /article-part-2
+    const article2Url = "https://example.com/article-part-2";
+    const article2Key = buildChatKey({
+      url: article2Url,
+      automationEnabled: false,
+      cacheContent: "Article part two content",
+    });
+    store.setJson("chat", article2Key, [{ role: "user", content: "about article 2" }], null, {
+      url: article2Url,
+      historyUrl: article2Url,
+      title: "Article Part 2",
+      model: null,
+      messageCount: 1,
+    });
+
+    // Canonical lookup for /article should NOT return /article-part-2
+    const entriesForArticle = store.listEntries("chat", {
+      filterUrl: articleUrl,
+      filterMode: "canonical",
+      limit: 10,
+    });
+    expect(entriesForArticle).toHaveLength(1);
+    const entry = store.getEntryWithMeta("chat", entriesForArticle[0].key);
+    const messages = JSON.parse(entry!.value);
+    expect(messages[0].content).toBe("about article 1");
+
+    // Canonical lookup for /article-part-2 should NOT return /article
+    const entriesForArticle2 = store.listEntries("chat", {
+      filterUrl: article2Url,
+      filterMode: "canonical",
+      limit: 10,
+    });
+    expect(entriesForArticle2).toHaveLength(1);
+    const entry2 = store.getEntryWithMeta("chat", entriesForArticle2[0].key);
+    const messages2 = JSON.parse(entry2!.value);
+    expect(messages2[0].content).toBe("about article 2");
+
+    // Contrast: default prefix matching WOULD incorrectly match both
+    const prefixEntries = store.listEntries("chat", {
+      filterUrl: articleUrl,
+      limit: 10,
+    });
+    expect(prefixEntries.length).toBeGreaterThanOrEqual(2);
+
+    store.close();
+  });
+
   it("URL-based fallback does not match unrelated URLs", async () => {
     const store = await makeTempStore();
 
