@@ -1171,7 +1171,8 @@ export default defineBackground(() => {
       console.debug("[summarize][panel:bg]", payload);
     };
 
-    if (reason === "spa-nav" || reason === "tab-url-change") {
+    const isSpaNav = reason === "spa-nav" || reason === "tab-url-change";
+    if (isSpaNav) {
       await new Promise((resolve) => setTimeout(resolve, 220));
     }
 
@@ -1334,6 +1335,36 @@ export default defineBackground(() => {
       });
       if (retry.ok) {
         extracted = retry.data;
+      }
+    }
+
+    // SPA content-change polling: After SPA navigation, the DOM may still
+    // show the previous page's content. Compare against the cached extract
+    // for this tab — if the text is identical, wait and re-extract.
+    if (isSpaNav && extracted.text && tab.id) {
+      const previousExtract = cachedExtracts.get(tab.id);
+      if (previousExtract?.text && previousExtract.text === extracted.text && previousExtract.text.length > 0) {
+        const SPA_POLL_DELAY_MS = 300;
+        const SPA_POLL_MAX_RETRIES = 5;
+        for (let attempt = 0; attempt < SPA_POLL_MAX_RETRIES; attempt++) {
+          if (controller.signal.aborted) break;
+          await new Promise((resolve) => setTimeout(resolve, SPA_POLL_DELAY_MS));
+          const poll = await extractFromTab(tab.id, settings.maxChars, {
+            timeoutMs: 4_000,
+            log: (event, detail) => logPanel(event, detail),
+          });
+          if (!poll.ok) continue;
+          if (poll.data.text !== previousExtract.text) {
+            extracted = poll.data;
+            logDiagnostic("background", "spa-poll-content-changed", {
+              attempt: attempt + 1,
+              tabUrl: tab.url,
+              newTextLength: poll.data.text?.length ?? 0,
+              previousTextLength: previousExtract.text.length,
+            }, { url: tab.url ?? undefined, tabId: tab.id });
+            break;
+          }
+        }
       }
     }
 
