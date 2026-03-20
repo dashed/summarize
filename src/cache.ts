@@ -684,12 +684,14 @@ export function buildSummaryCacheKey({
   model,
   lengthKey,
   languageKey,
+  url,
 }: {
   contentHash: string;
   promptHash: string;
   model: string;
   lengthKey: string;
   languageKey: string;
+  url?: string | null;
 }): string {
   return hashJson({
     contentHash,
@@ -697,6 +699,9 @@ export function buildSummaryCacheKey({
     model,
     lengthKey,
     languageKey,
+    // Include URL to prevent cache collisions when different pages
+    // produce identical extracted text (e.g. Reddit SPA navigation).
+    ...(url ? { url } : {}),
     formatVersion: CACHE_FORMAT_VERSION,
   });
 }

@@ -509,6 +509,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url: args.url,
       });
       const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>(
         "summary",
@@ -558,6 +559,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
           model: attempt.userModelId,
           lengthKey,
           languageKey,
+          url: args.url,
         });
         const cached = cacheStoreForRead.getText("summary", key);
         if (!cached) continue;
@@ -685,6 +687,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
       model: usedAttempt.userModelId,
       lengthKey,
       languageKey,
+      url: args.url,
     });
     const preset = ctx.lengthArg.kind === "preset" ? ctx.lengthArg.preset : null;
     const cacheMeta = {
@@ -717,6 +720,7 @@ export async function summarizeAsset(ctx: AssetSummaryContext, args: SummarizeAs
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url: args.url,
       });
       cacheStoreForWrite.setJson(
         "summary",

@@ -52,6 +52,36 @@ describe("cache keys and tags", () => {
     expect(diffLang).not.toBe(base);
   });
 
+  it("differentiates cache keys by URL to prevent cross-page collisions", () => {
+    // When two different pages produce identical extracted text (e.g. Reddit SPA),
+    // the URL must prevent cache key collisions.
+    const baseArgs = {
+      contentHash: "same-content-hash",
+      promptHash: "same-prompt",
+      model: "openai/gpt-5.2",
+      lengthKey: "chars:140",
+      languageKey: "en",
+    };
+
+    const keyA = buildSummaryCacheKey({
+      ...baseArgs,
+      url: "https://www.reddit.com/r/pcgaming/comments/abc123/post_a/",
+    });
+    const keyB = buildSummaryCacheKey({
+      ...baseArgs,
+      url: "https://www.reddit.com/r/pcgaming/comments/xyz789/post_b/",
+    });
+    const keyNoUrl = buildSummaryCacheKey(baseArgs);
+    const keyNull = buildSummaryCacheKey({ ...baseArgs, url: null });
+
+    // Different URLs must produce different keys
+    expect(keyA).not.toBe(keyB);
+    // No URL and null URL should produce the same key (backwards compat)
+    expect(keyNoUrl).toBe(keyNull);
+    // URL key must differ from no-URL key
+    expect(keyA).not.toBe(keyNoUrl);
+  });
+
   it("changes extract keys when transcript timestamp options change", () => {
     const base = buildExtractCacheKey({
       url: "https://example.com/video",

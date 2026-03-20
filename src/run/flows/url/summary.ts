@@ -981,6 +981,7 @@ export async function summarizeExtractedUrl({
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url,
       });
       const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>(
         "summary",
@@ -1030,6 +1031,7 @@ export async function summarizeExtractedUrl({
           model: attempt.userModelId,
           lengthKey,
           languageKey,
+          url,
         });
         const cached = cacheStoreForRead.getText("summary", key);
         if (!cached) continue;
@@ -1162,6 +1164,7 @@ export async function summarizeExtractedUrl({
       model: usedAttempt.userModelId,
       lengthKey,
       languageKey,
+      url,
     });
     const cacheMeta = {
       model: usedAttempt.userModelId,
@@ -1196,6 +1199,7 @@ export async function summarizeExtractedUrl({
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url,
       });
       cacheStoreForWrite.setJson(
         "summary",
