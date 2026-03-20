@@ -84,31 +84,39 @@ const SKIPPED_RULES = [
   "svg-img-alt",
 ];
 
+// Cache file reads — each page's HTML/CSS is read once, not per test.
+const fileCache = new Map<string, string>();
+function cachedRead(filePath: string): string {
+  let content = fileCache.get(filePath);
+  if (content === undefined) {
+    content = readFileSync(filePath, "utf-8");
+    fileCache.set(filePath, content);
+  }
+  return content;
+}
+
+function loadPageIntoDocument(page: HtmlPage): void {
+  const prepared = prepareHtml(cachedRead(page.htmlPath), cachedRead(page.cssPath));
+  document.documentElement.innerHTML = "";
+  document.open();
+  document.write(prepared);
+  document.close();
+}
+
+const defaultAxeOptions: axe.RunOptions = {
+  rules: Object.fromEntries(SKIPPED_RULES.map((id) => [id, { enabled: false }])),
+  resultTypes: ["violations"],
+};
+
 describe("accessibility (axe-core)", () => {
   for (const page of pages) {
     describe(page.name, () => {
       it("has no critical or serious WCAG 2.1 AA violations", async () => {
-        const htmlSource = readFileSync(page.htmlPath, "utf-8");
-        const cssSource = readFileSync(page.cssPath, "utf-8");
-        const prepared = prepareHtml(htmlSource, cssSource);
-
-        // Load into jsdom document
-        document.documentElement.innerHTML = "";
-        document.open();
-        document.write(prepared);
-        document.close();
-
-        // Run axe-core
-        const results = await axe.run(document.documentElement, {
-          rules: Object.fromEntries(SKIPPED_RULES.map((id) => [id, { enabled: false }])),
-          resultTypes: ["violations"],
-        });
-
-        // Filter to critical and serious only — minor/moderate are informational
+        loadPageIntoDocument(page);
+        const results = await axe.run(document.documentElement, defaultAxeOptions);
         const serious = results.violations.filter(
           (v) => v.impact === "critical" || v.impact === "serious",
         );
-
         if (serious.length > 0) {
           expect.fail(
             `Found ${serious.length} critical/serious accessibility violation(s):\n\n${formatViolations(serious)}`,
@@ -117,22 +125,9 @@ describe("accessibility (axe-core)", () => {
       });
 
       it("has no moderate accessibility violations", async () => {
-        const htmlSource = readFileSync(page.htmlPath, "utf-8");
-        const cssSource = readFileSync(page.cssPath, "utf-8");
-        const prepared = prepareHtml(htmlSource, cssSource);
-
-        document.documentElement.innerHTML = "";
-        document.open();
-        document.write(prepared);
-        document.close();
-
-        const results = await axe.run(document.documentElement, {
-          rules: Object.fromEntries(SKIPPED_RULES.map((id) => [id, { enabled: false }])),
-          resultTypes: ["violations"],
-        });
-
+        loadPageIntoDocument(page);
+        const results = await axe.run(document.documentElement, defaultAxeOptions);
         const moderate = results.violations.filter((v) => v.impact === "moderate");
-
         if (moderate.length > 0) {
           expect.fail(
             `Found ${moderate.length} moderate accessibility violation(s):\n\n${formatViolations(moderate)}`,
@@ -141,16 +136,8 @@ describe("accessibility (axe-core)", () => {
       });
 
       it("all interactive elements have accessible names", async () => {
-        const htmlSource = readFileSync(page.htmlPath, "utf-8");
-        const cssSource = readFileSync(page.cssPath, "utf-8");
-        const prepared = prepareHtml(htmlSource, cssSource);
+        loadPageIntoDocument(page);
 
-        document.documentElement.innerHTML = "";
-        document.open();
-        document.write(prepared);
-        document.close();
-
-        // Check buttons have aria-label or visible text
         const buttons = document.querySelectorAll("button");
         const unlabeled: string[] = [];
         for (const btn of buttons) {
@@ -167,7 +154,6 @@ describe("accessibility (axe-core)", () => {
           `Buttons without accessible names:\n${unlabeled.join("\n")}`,
         ).toEqual([]);
 
-        // Check inputs/textareas have labels or aria-label
         const inputs = document.querySelectorAll("input, textarea, select");
         const unlabeledInputs: string[] = [];
         for (const input of inputs) {
@@ -178,7 +164,6 @@ describe("accessibility (axe-core)", () => {
           const placeholder = el.getAttribute("placeholder");
           const hasLabel = id && document.querySelector(`label[for="${id}"]`);
           const parentLabel = el.closest("label");
-          // hidden inputs don't need labels
           if ((input as HTMLInputElement).type === "hidden") continue;
           if (el.hasAttribute("hidden")) continue;
           if (!ariaLabel && !ariaLabelledBy && !hasLabel && !parentLabel && !placeholder) {
@@ -192,15 +177,7 @@ describe("accessibility (axe-core)", () => {
       });
 
       it("ARIA attributes are valid", async () => {
-        const htmlSource = readFileSync(page.htmlPath, "utf-8");
-        const cssSource = readFileSync(page.cssPath, "utf-8");
-        const prepared = prepareHtml(htmlSource, cssSource);
-
-        document.documentElement.innerHTML = "";
-        document.open();
-        document.write(prepared);
-        document.close();
-
+        loadPageIntoDocument(page);
         const results = await axe.run(document.documentElement, {
           runOnly: {
             type: "rule",
@@ -218,7 +195,6 @@ describe("accessibility (axe-core)", () => {
           },
           resultTypes: ["violations"],
         });
-
         if (results.violations.length > 0) {
           expect.fail(
             `Found ${results.violations.length} ARIA violation(s):\n\n${formatViolations(results.violations)}`,

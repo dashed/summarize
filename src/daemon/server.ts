@@ -24,7 +24,7 @@ import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js"
 import { resolveGitSha, resolvePackageVersion } from "../version.js";
 import { completeAgentResponse, getAgentBaseSystemPrompt, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
-import { type DiagnosticEvent, type DiagnosticsStore, createDiagnosticsStore } from "./diagnostics.js";
+import { type DiagnosticEvent, type DiagnosticsStore, SEVEN_DAYS_MS, createDiagnosticsStore } from "./diagnostics.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
 import { buildChatHistoryKey } from "./history.js";
 import { resolveDaemonLogPaths } from "./launchd.js";
@@ -683,7 +683,6 @@ export async function runDaemonServer({
           json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
           return;
         }
-        const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
         const olderThanMs = url.searchParams.has("olderThanMs")
           ? Number(url.searchParams.get("olderThanMs"))
           : SEVEN_DAYS_MS;

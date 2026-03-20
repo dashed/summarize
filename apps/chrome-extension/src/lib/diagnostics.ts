@@ -23,18 +23,13 @@ let flushTimer = 0;
 let flushing = false;
 let cachedToken: string | null = null;
 
-function getToken(): string | null {
-  return cachedToken;
-}
-
 export function setDiagnosticsToken(token: string | null): void {
   cachedToken = token;
 }
 
 async function flush(): Promise<void> {
   if (flushing || queue.length === 0) return;
-  const token = getToken();
-  if (!token) return;
+  if (!cachedToken) return;
 
   const batch = queue.splice(0, MAX_QUEUE_SIZE);
   flushing = true;
@@ -42,7 +37,7 @@ async function flush(): Promise<void> {
     await fetch("http://127.0.0.1:8787/v1/diagnostics", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${cachedToken}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ events: batch }),
@@ -84,6 +79,10 @@ export function logDiagnostic(
   queue.push(entry);
 
   if (queue.length >= MAX_QUEUE_SIZE) {
+    if (flushTimer) {
+      globalThis.clearTimeout(flushTimer);
+      flushTimer = 0;
+    }
     void flush();
   } else {
     scheduleFlush();

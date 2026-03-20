@@ -37,7 +37,7 @@ export type DiagnosticsStore = {
   purge: (olderThanMs?: number) => number;
 };
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 function parseDetail(raw: unknown): Record<string, unknown> | null {
   if (typeof raw !== "string" || !raw) return null;
