@@ -1,6 +1,7 @@
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
 import { extractYouTubeVideoId, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { logDiagnostic } from "../../lib/diagnostics";
+import { urlsMatch } from "../../lib/url-match";
 import { SUMMARY_LENGTH_SPECS } from "@steipete/summarize-core/prompts";
 import katexPlugin from "@traptitech/markdown-it-katex";
 import MarkdownIt from "markdown-it";
@@ -981,28 +982,6 @@ updateChatDockHeight();
 const chatDockObserver = new ResizeObserver(() => updateChatDockHeight());
 chatDockObserver.observe(chatDockEl);
 
-function normalizeUrl(value: string) {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-
-function urlsMatch(a: string, b: string) {
-  const left = normalizeUrl(a);
-  const right = normalizeUrl(b);
-  if (left === right) return true;
-  const boundaryMatch = (longer: string, shorter: string) => {
-    if (!longer.startsWith(shorter)) return false;
-    if (longer.length === shorter.length) return true;
-    const next = longer[shorter.length];
-    return next === "/" || next === "?" || next === "&";
-  };
-  return boundaryMatch(left, right) || boundaryMatch(right, left);
-}
 
 function markAgentNavigationIntent(url: string | null | undefined) {
   const trimmed = typeof url === "string" ? url.trim() : "";
@@ -2913,7 +2892,7 @@ async function restoreSummaryFromHistory(url: string) {
       console.log("[restoreSummary] summary already set");
       return;
     }
-    if (activeTabUrl !== url) {
+    if (activeTabUrl && url && !urlsMatch(activeTabUrl, url)) {
       console.log("[restoreSummary] url changed:", activeTabUrl, "!==", url);
       return;
     }
@@ -2945,7 +2924,7 @@ async function restoreSummaryFromHistory(url: string) {
       console.log("[restoreSummary] summary already set (2)");
       return;
     }
-    if (activeTabUrl !== url) {
+    if (activeTabUrl && url && !urlsMatch(activeTabUrl, url)) {
       console.log("[restoreSummary] url changed (2)");
       return;
     }

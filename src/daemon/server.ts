@@ -1830,6 +1830,7 @@ export async function runDaemonServer({
         if (!messages?.length) {
           const entries = store.listEntries("chat", {
             filterUrl: String(bodyUrl),
+            filterMode: "canonical",
             limit: 1,
           });
           if (entries.length > 0) {

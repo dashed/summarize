@@ -19,6 +19,7 @@ import { logExtensionEvent } from "../lib/extension-logs";
 import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { loadSettings, patchSettings } from "../lib/settings";
 import { parseSseStream } from "../lib/sse";
+import { urlsMatch } from "../lib/url-match";
 
 type PanelToBg =
   | { type: "panel:ready" }
@@ -367,29 +368,6 @@ function friendlyFetchError(err: unknown, context: string): string {
     return `${context}: Failed to fetch (daemon unreachable or blocked by Chrome; try \`summarize daemon status\` and check ~/.summarize/logs/daemon.err.log)`;
   }
   return `${context}: ${message}`;
-}
-
-function normalizeUrl(value: string) {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-
-function urlsMatch(a: string, b: string) {
-  const left = normalizeUrl(a);
-  const right = normalizeUrl(b);
-  if (left === right) return true;
-  const boundaryMatch = (longer: string, shorter: string) => {
-    if (!longer.startsWith(shorter)) return false;
-    if (longer.length === shorter.length) return true;
-    const next = longer[shorter.length];
-    return next === "/" || next === "?" || next === "&";
-  };
-  return boundaryMatch(left, right) || boundaryMatch(right, left);
 }
 
 function isYouTubeWatchUrl(value: string | null | undefined): boolean {
@@ -838,7 +816,7 @@ export default defineBackground(() => {
   const getCachedExtract = (tabId: number, url?: string | null) => {
     const cached = cachedExtracts.get(tabId) ?? null;
     if (!cached) return null;
-    if (url && cached.url !== url) {
+    if (url && !urlsMatch(cached.url, url)) {
       cachedExtracts.delete(tabId);
       return null;
     }
@@ -852,7 +830,7 @@ export default defineBackground(() => {
   const getPanelCache = (tabId: number, url?: string | null) => {
     const cached = panelCacheByTabId.get(tabId) ?? null;
     if (!cached) return null;
-    if (url && cached.url !== url) return null;
+    if (url && !urlsMatch(cached.url, url)) return null;
     return cached;
   };
 
