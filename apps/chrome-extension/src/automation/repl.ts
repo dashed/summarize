@@ -207,40 +207,36 @@ async function runBrowserJs(
           originalLog(...args)
         }
 
+        const sendExtensionRpc = (message) => {
+          const runtime = globalThis.chrome?.runtime
+          if (!runtime || typeof runtime.sendMessage !== 'function') {
+            throw new Error('Extension messaging is unavailable in this user script world')
+          }
+          return new Promise((resolve, reject) => {
+            runtime.sendMessage(message, (response) => {
+              const runtimeError = runtime.lastError
+              if (runtimeError?.message) {
+                reject(new Error(runtimeError.message))
+                return
+              }
+              if (response?.ok) {
+                resolve(response.result ?? true)
+                return
+              }
+              reject(new Error(response?.error || 'Extension request failed'))
+            })
+          })
+        }
+
         const postNativeInput = (payload) => {
           if (!${nativeInputEnabled ? "true" : "false"}) {
             throw new Error('Native input requires debugger permission')
           }
-          return new Promise((resolve, reject) => {
-            const requestId = \`\${Date.now()}-\${Math.random().toString(36).slice(2)}\`
-            const handler = (event) => {
-              if (event.source !== window) return
-              const msg = event.data || {}
-              if (msg?.source !== 'summarize-native-input' || msg.requestId !== requestId) return
-              window.removeEventListener('message', handler)
-              if (msg.ok) resolve(true)
-              else reject(new Error(msg.error || 'Native input failed'))
-            }
-            window.addEventListener('message', handler)
-            window.postMessage({ source: 'summarize-native-input', requestId, payload }, '*')
-          })
+          return sendExtensionRpc({ type: 'automation:native-input', payload })
         }
 
-        const sendArtifactRpc = (action, payload) => {
-          return new Promise((resolve, reject) => {
-            const requestId = \`\${Date.now()}-\${Math.random().toString(36).slice(2)}\`
-            const handler = (event) => {
-              if (event.source !== window) return
-              const msg = event.data || {}
-              if (msg?.source !== 'summarize-artifacts' || msg.requestId !== requestId) return
-              window.removeEventListener('message', handler)
-              if (msg.ok) resolve(msg.result)
-              else reject(new Error(msg.error || 'Artifact operation failed'))
-            }
-            window.addEventListener('message', handler)
-            window.postMessage({ source: 'summarize-artifacts', requestId, action, payload }, '*')
-          })
-        }
+        const sendArtifactRpc = (action, payload) =>
+          sendExtensionRpc({ type: 'automation:artifacts', action, payload })
 
         const attachNativeHelpers = () => {
           const resolveElement = (selector) => {
@@ -304,7 +300,7 @@ async function runBrowserJs(
   try {
     await userScripts.configureWorld?.({
       worldId: "summarize-browserjs",
-      messaging: false,
+      messaging: true,
       csp: "script-src 'unsafe-eval' 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; frame-src 'none'; font-src 'none'; object-src 'none'; default-src 'none';",
     });
   } catch {

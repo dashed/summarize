@@ -464,6 +464,14 @@ export async function handleDaemonRequest({
       throw new Error("Daemon not configured");
     }
     const mergedEnv = mergeDaemonEnv({ envForRun, snapshot: cfg.env });
+    // Apply snapshot PATH to process.env so child processes (yt-dlp, deno, etc.)
+    // inherit the correct PATH from the install-time environment.
+    if (mergedEnv.PATH) {
+      process.env.PATH = mergedEnv.PATH;
+    }
+    if (mergedEnv.SUMMARIZE_DEBUG_DUMP) {
+      process.env.SUMMARIZE_DEBUG_DUMP = mergedEnv.SUMMARIZE_DEBUG_DUMP;
+    }
     await runDaemonServer({ env: mergedEnv, fetchImpl, config: cfg });
     return true;
   }

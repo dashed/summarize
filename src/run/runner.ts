@@ -917,6 +917,7 @@ export async function runCli(
           apifyToken,
           ytDlpPath,
           ytDlpCookiesFromBrowser,
+          ytDlpCookiesFile: null,
           falApiKey,
           groqApiKey,
           openaiTranscriptionKey,

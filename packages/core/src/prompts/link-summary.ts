@@ -13,6 +13,26 @@ const HEADING_LENGTH_CHAR_THRESHOLD = 6000;
 
 export { SUMMARY_LENGTH_TO_TOKENS };
 
+function formatChapterTimestamp(seconds: number): string {
+  const clamped = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const secs = clamped % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(secs).padStart(2, "0");
+  if (hours <= 0) return `${minutes}:${ss}`;
+  const hh = String(hours).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function formatChaptersBlock(
+  chapters: { startTime: number; endTime: number; title: string }[] | null | undefined,
+): string | null {
+  if (!chapters || chapters.length === 0) return null;
+  const lines = chapters.map((ch) => `- [${formatChapterTimestamp(ch.startTime)}] ${ch.title}`);
+  return `Video chapters:\n${lines.join("\n")}`;
+}
+
 export type SummaryLengthTarget = SummaryLength | { maxCharacters: number };
 
 export function pickSummaryLengthForCharacters(maxCharacters: number): SummaryLength {
@@ -29,6 +49,8 @@ export function estimateMaxCompletionTokensForCharacters(maxCharacters: number):
 }
 
 const formatCount = (value: number): string => value.toLocaleString();
+
+export type VideoDetailLevel = "summary" | "detailed";
 
 export type ShareContextEntry = {
   author: string;
@@ -49,13 +71,16 @@ export function buildLinkSummaryPrompt({
   truncated,
   hasTranscript,
   hasTranscriptTimestamps = false,
+  isYouTube = false,
   slides,
+  chapters,
   outputLanguage,
   summaryLength,
   shares,
   promptOverride,
   lengthInstruction,
   languageInstruction,
+  videoDetailLevel,
 }: {
   url: string;
   title: string | null;
@@ -65,19 +90,24 @@ export function buildLinkSummaryPrompt({
   truncated: boolean;
   hasTranscript: boolean;
   hasTranscriptTimestamps?: boolean;
+  isYouTube?: boolean;
   slides?: { count: number; text: string } | null;
+  chapters?: { startTime: number; endTime: number; title: string }[] | null;
   summaryLength: SummaryLengthTarget;
   outputLanguage?: OutputLanguage | null;
   shares: ShareContextEntry[];
   promptOverride?: string | null;
   lengthInstruction?: string | null;
   languageInstruction?: string | null;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): string {
   const slidesText = slides?.text?.trim() ?? "";
-  const contentWithSlides =
-    slidesText.length > 0
-      ? `${content}\n\nSlide timeline (transcript excerpts):\n${slidesText}`
-      : content;
+  const chaptersBlock = formatChaptersBlock(chapters);
+  const contentParts = [content];
+  if (chaptersBlock) contentParts.push(chaptersBlock);
+  if (slidesText.length > 0)
+    contentParts.push(`Slide timeline (transcript excerpts):\n${slidesText}`);
+  const contentWithSlides = contentParts.join("\n\n");
   const contentCharacters = contentWithSlides.length;
   const contextLines: string[] = [`Source URL: ${url}`];
 
@@ -99,9 +129,15 @@ export function buildLinkSummaryPrompt({
 
   const contextHeader = contextLines.join("\n");
 
-  const audienceLine = hasTranscript
-    ? "You summarize online videos for curious Twitter users who want to know whether the clip is worth watching."
-    : "You summarize online articles for curious Twitter users who want the gist before deciding to dive in.";
+  const effectiveVideoDetailLevel = videoDetailLevel ?? "detailed";
+  const isVideoContent = hasTranscript || isYouTube;
+  const useVideoSummaryMode = isVideoContent && effectiveVideoDetailLevel === "summary";
+
+  const audienceLine = isVideoContent
+    ? useVideoSummaryMode
+      ? "You summarize online videos for readers who want to know what the video covers before deciding to watch it."
+      : "You convert video content into detailed, readable text with timestamp navigation. Your goal is to let the reader fully consume the video's content in written form without needing to watch it."
+    : "You summarize online articles for curious readers who want the gist before deciding to dive in.";
 
   const effectiveSummaryLength: SummaryLengthTarget =
     typeof summaryLength === "string"
@@ -137,7 +173,9 @@ export function buildLinkSummaryPrompt({
       : `Target length: up to ${formatCount(effectiveSummaryLength.maxCharacters)} characters total (including Markdown and whitespace). Hard limit: do not exceed it.`;
   const contentLengthLine =
     contentCharacters > 0
-      ? `Extracted content length: ${formatCount(contentCharacters)} characters. Hard limit: never exceed this length. If the requested length is larger, do not pad—finish early rather than adding filler.`
+      ? isVideoContent && !useVideoSummaryMode
+        ? `Extracted transcript/content length: ${formatCount(contentCharacters)} characters. The transcript is only the spoken words; your writeup should also describe visual elements, organize information with headings, and include timestamps — so it can be longer than the raw transcript. Do not pad with filler, but do use the full allowed summary length for thorough coverage.`
+        : `Extracted content length: ${formatCount(contentCharacters)} characters. Hard limit: never exceed this length. If the requested length is larger, do not pad—finish early rather than adding filler.`
       : "";
 
   const shareLines = shares.map((share) => {
@@ -163,10 +201,26 @@ export function buildLinkSummaryPrompt({
       : 'You are not given any quotes from people who shared this link. Do not fabricate reactions or add a "What sharers are saying" subsection.';
 
   const shareBlock = shares.length > 0 ? `Tweets from sharers:\n${shareLines.join("\n")}` : "";
-  const timestampInstruction =
-    hasTranscriptTimestamps && !(slides && slides.count > 0)
-      ? 'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp from the transcript. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.'
-      : "";
+  const includeTimestamps = (hasTranscriptTimestamps || isYouTube) && !(slides && slides.count > 0);
+  if (includeTimestamps && isYouTube && !hasTranscriptTimestamps) {
+    console.error("[summarize:video] prompt: including YouTube timestamp instruction");
+  }
+  const simpleTimestampInstruction =
+    'Add a "Key moments" section with 3-6 bullets (2-4 if the summary is short). Start each bullet with a [mm:ss] (or [hh:mm:ss]) timestamp. Keep the rest of the summary readable and follow the normal formatting guidance; do not prepend timestamps outside the Key moments section. Do not invent timestamps or use ranges.';
+  const timestampInstruction = !includeTimestamps
+    ? ""
+    : isYouTube && !useVideoSummaryMode
+      ? [
+          "Weave [mm:ss] (or [hh:mm:ss]) timestamps throughout the summary wherever you reference a specific moment, topic change, or visual from the video.",
+          'Place them naturally inline, for example: "At [2:15], the speaker introduces..." or "The demo ([5:30]) shows...".',
+          'End with a "Key moments" section containing 5-10 timestamp bullets as a quick-navigation guide to the most important parts of the video.',
+          "Use timestamps liberally — they help the reader jump to relevant parts of the video. Do not invent timestamps or use ranges.",
+          "Since you have access to the video content, be thorough: cover the main arguments, visual demos, key data points, and conclusions. Use the full allowed summary length.",
+          "If the video has little or no spoken audio (e.g. gameplay, screen recordings, tutorials with on-screen text, timelapses), you MUST thoroughly describe all visual content: every on-screen text, UI element, menu interaction, button click, code snippet, diagram, demonstration step, visual transition, and key event. Narrate the visual experience in detail as if describing it to someone who cannot see the screen — the visual content IS the primary content and must be described comprehensively.",
+          "Cover the ENTIRE video from start to finish. Distribute your coverage evenly across all segments — do not front-load the summary or skip later sections. Every major topic transition should get its own timestamp. Aim for at least one timestamp per 1-2 minutes of video.",
+          "When the video has minimal narration or sparse dialogue, expand your visual descriptions and contextual analysis to meet the full length target. Do not stop generating early — use the entire allowed length for thorough, detailed coverage of the video's content.",
+        ].join(" ")
+      : simpleTimestampInstruction;
   const slideMarkers =
     slides && slides.count > 0
       ? Array.from({ length: slides.count }, (_, index) => `[slide:${index + 1}]`).join(" ")
@@ -204,6 +258,11 @@ export function buildLinkSummaryPrompt({
       ? "Omit sponsor messages, ads, promos, and calls-to-action (including podcast ad reads), even if they appear in the transcript or slide timeline. Do not mention or acknowledge them, and do not say you skipped or ignored anything. Avoid sponsor/ad/promo language, brand names like Squarespace, or CTA phrases like discount code. Treat them as if they do not exist. If a slide segment is purely sponsor/ad content, leave that slide marker with no text."
       : "";
 
+  const chapterInstruction =
+    chaptersBlock && !(slides && slides.count > 0)
+      ? "The content includes video chapters with timestamps. Use the chapter titles as guidance for organizing the summary into sections when appropriate. Do not reproduce the chapter list verbatim."
+      : "";
+
   const baseInstructions = [
     "Hard rules: never mention sponsor/ads; use straight quotation marks only (no curly quotes).",
     "Apostrophes in contractions are OK.",
@@ -225,6 +284,7 @@ export function buildLinkSummaryPrompt({
     "Base everything strictly on the provided content and never invent details.",
     "Final check: remove any sponsor/ad references or mentions of skipping/ignoring content. Ensure excerpts (if any) are italicized and use only straight quotes.",
     'Final check for slides: every [slide:N] must be immediately followed by a line that starts with "## ". Remove any "Title:" or "Slide" label lines.',
+    chapterInstruction,
     timestampInstruction,
     shareGuidance,
     slideInstruction,

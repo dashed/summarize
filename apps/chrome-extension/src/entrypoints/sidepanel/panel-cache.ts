@@ -17,6 +17,10 @@ export type PanelCachePayload = {
   lastMeta: PanelCacheMeta;
   slides: SseSlidesData | null;
   transcriptTimedText: string | null;
+  /** Elapsed timer value (ms) at the time the cache was saved. */
+  elapsedMs?: number | null;
+  /** Progress bar position (0–100) at the time the cache was saved. */
+  trackedProgress?: number | null;
 };
 
 export type PanelCacheResponse = {
@@ -128,4 +132,33 @@ export function createPanelCacheController(
   };
 
   return { resolve, scheduleSync, syncNow, request, consumeResponse };
+}
+
+// ---------------------------------------------------------------------------
+// Pure helper: decide what to do when restoring a cached panel state
+// ---------------------------------------------------------------------------
+
+export type RestoreAction =
+  | { kind: "render"; markdown: string }
+  | { kind: "reconnect"; runId: string; url: string; title: string }
+  | { kind: "empty" };
+
+/**
+ * Given a cached panel payload, decide whether to render the cached markdown,
+ * reconnect to the daemon SSE replay (in-progress run that was interrupted by
+ * a tab switch), or show an empty state.
+ */
+export function resolveRestoreAction(payload: PanelCachePayload): RestoreAction {
+  if (payload.summaryMarkdown) {
+    return { kind: "render", markdown: payload.summaryMarkdown };
+  }
+  if (payload.runId) {
+    return {
+      kind: "reconnect",
+      runId: payload.runId,
+      url: payload.url,
+      title: payload.title ?? "",
+    };
+  }
+  return { kind: "empty" };
 }

@@ -60,6 +60,7 @@ export function buildSummarizeRequestBody({
   inputMode,
   timestamps,
   slides,
+  cookies,
 }: {
   extracted: ExtractedPage;
   settings: Settings;
@@ -72,6 +73,7 @@ export function buildSummarizeRequestBody({
     maxSlides?: number | null;
     minDurationSeconds?: number | null;
   };
+  cookies?: string | null;
 }): Record<string, unknown> {
   const baseBody = buildDaemonRequestBody({ extracted, settings, noCache });
   const withTimestamps = timestamps ? { ...baseBody, timestamps: true } : baseBody;
@@ -90,16 +92,19 @@ export function buildSummarizeRequestBody({
           : {}),
       }
     : {};
+  let result: Record<string, unknown>;
   if (inputMode === "video") {
-    return {
+    result = {
       ...withTimestamps,
       mode: "url",
       videoMode: "transcript",
+      videoDetailLevel: settings.videoDetailLevel,
       ...slidesSettings,
     };
+  } else if (inputMode === "page") {
+    result = { ...withTimestamps, mode: "page" };
+  } else {
+    result = slidesEnabled ? { ...withTimestamps, ...slidesSettings } : withTimestamps;
   }
-  if (inputMode === "page") {
-    return { ...withTimestamps, mode: "page" };
-  }
-  return slidesEnabled ? { ...withTimestamps, ...slidesSettings } : withTimestamps;
+  return cookies ? { ...result, cookies } : result;
 }

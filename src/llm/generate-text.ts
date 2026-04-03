@@ -4,7 +4,14 @@ import type { OpenAiClientConfig } from "./providers/types.js";
 import type { LlmTokenUsage } from "./types.js";
 import { createUnsupportedFunctionalityError } from "./errors.js";
 import { parseGatewayStyleModelId } from "./model-id.js";
-import { type Prompt, userTextAndImageMessage } from "./prompt.js";
+import {
+  type Prompt,
+  hasVideoUrlParts,
+  stripVideoUrlParts,
+  userInterleavedMessage,
+  userTextAndImageMessage,
+  userTextAndImagesMessage,
+} from "./prompt.js";
 import {
   completeAnthropicDocument,
   completeAnthropicText,
@@ -22,6 +29,8 @@ import {
 import {
   completeOpenAiDocument,
   completeOpenAiText,
+  completeOpenAiTextWithVideo,
+  streamOpenAiTextWithVideo,
   resolveOpenAiClientConfig,
 } from "./providers/openai.js";
 import { extractText } from "./providers/shared.js";
@@ -49,29 +58,52 @@ type RetryNotice = {
 };
 
 function promptToContext(prompt: Prompt): Context {
+  // When interleaved parts are provided, they take priority over userText+attachments.
+  if (prompt.interleavedParts && prompt.interleavedParts.length > 0) {
+    const messages: Message[] = [userInterleavedMessage({ parts: prompt.interleavedParts })];
+    return { systemPrompt: prompt.system, messages };
+  }
+
   const attachments = prompt.attachments ?? [];
   if (attachments.some((attachment) => attachment.kind === "document")) {
     throw new Error("Internal error: document prompt cannot be converted to context.");
   }
-  if (attachments.length === 0) {
+  const imageAttachments = attachments.filter((a) => a.kind === "image");
+  if (imageAttachments.length !== attachments.length) {
+    throw new Error("Internal error: non-image attachments cannot be converted to context.");
+  }
+  if (imageAttachments.length === 0) {
     return {
       systemPrompt: prompt.system,
       messages: [{ role: "user", content: prompt.userText, timestamp: Date.now() }],
     };
   }
-  if (attachments.length !== 1 || attachments[0]?.kind !== "image") {
-    throw new Error("Internal error: only single image attachments are supported for prompts.");
+  if (imageAttachments.length === 1) {
+    const attachment = imageAttachments[0]!;
+    const messages: Message[] = [
+      userTextAndImageMessage({
+        text: prompt.userText,
+        imageBytes: attachment.bytes,
+        mimeType: attachment.mediaType,
+      }),
+    ];
+    return { systemPrompt: prompt.system, messages };
   }
-  const attachment = attachments[0];
   const messages: Message[] = [
-    userTextAndImageMessage({
+    userTextAndImagesMessage({
       text: prompt.userText,
-      imageBytes: attachment.bytes,
-      mimeType: attachment.mediaType,
+      images: imageAttachments.map((a) => ({ imageBytes: a.bytes, mimeType: a.mediaType })),
     }),
   ];
   return { systemPrompt: prompt.system, messages };
 }
+
+/**
+ * Minimum timeout for video_url requests (2 minutes).  With Google AI Studio
+ * provider routing, video+reasoning requests typically complete in ~10 seconds,
+ * so 2 minutes provides ample safety margin.
+ */
+export const VIDEO_MIN_TIMEOUT_MS = 120_000;
 
 function isRetryableTimeoutError(error: unknown): boolean {
   if (!error) return false;
@@ -151,12 +183,32 @@ function resolveEffectiveTemperature({
   return temperature;
 }
 
+/** Models that support and benefit from reasoning/thinking tokens. */
+export function isGeminiThinkingModel(model: string): boolean {
+  return model.includes("gemini-3") || model.includes("gemini-2.5-flash");
+}
+
+export type ReasoningLevel = "minimal" | "low" | "medium" | "high";
+
+export function resolveEffectiveReasoning({
+  parsed,
+  reasoning,
+}: {
+  parsed: { model: string };
+  reasoning?: ReasoningLevel;
+}): ReasoningLevel | undefined {
+  if (reasoning) return reasoning;
+  if (isGeminiThinkingModel(parsed.model)) return "high";
+  return undefined;
+}
+
 export async function generateTextWithModelId({
   modelId,
   apiKeys,
   prompt,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -173,6 +225,7 @@ export async function generateTextWithModelId({
   prompt: Prompt;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -191,6 +244,7 @@ export async function generateTextWithModelId({
 }> {
   const parsed = parseGatewayStyleModelId(modelId);
   const effectiveTemperature = resolveEffectiveTemperature({ parsed, temperature });
+  const effectiveReasoning = resolveEffectiveReasoning({ parsed, reasoning });
 
   const attachments = prompt.attachments ?? [];
   const documentAttachment =
@@ -286,6 +340,65 @@ export async function generateTextWithModelId({
     );
   }
 
+  // Handle prompts that contain video_url parts (e.g. YouTube URL for Gemini).
+  // The pi-ai SDK has no video content type, so we use a raw fetch path for
+  // OpenAI-compatible APIs (including OpenRouter).  For other providers we
+  // strip the video parts and fall through to the normal path.
+  if (hasVideoUrlParts(prompt)) {
+    const videoUrls = prompt
+      .interleavedParts!.filter((p) => p.kind === "video_url")
+      .map((p) => (p as { url: string }).url);
+    console.error(
+      `[summarize:video] non-streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
+        `provider=${parsed.provider}. URLs: ${videoUrls.join(", ")}`,
+    );
+    if (parsed.provider === "openai") {
+      const openaiConfig = resolveOpenAiClientConfig({
+        apiKeys: {
+          openaiApiKey: apiKeys.openaiApiKey,
+          openrouterApiKey: apiKeys.openrouterApiKey,
+        },
+        forceOpenRouter,
+        openaiBaseUrlOverride,
+        forceChatCompletions,
+      });
+      const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
+      console.error(
+        `[video-debug] generateTextWithModelId ROUTE: path=video/non-streaming, model=${parsed.canonical}, ` +
+          `reasoning=${effectiveReasoning ?? "none"}, timeout=${videoTimeoutMs}ms (original=${timeoutMs}ms, min=${VIDEO_MIN_TIMEOUT_MS}ms)`,
+      );
+      const result = await completeOpenAiTextWithVideo({
+        modelId: parsed.model,
+        openaiConfig,
+        system: prompt.system,
+        interleavedParts: prompt.interleavedParts!,
+        temperature: effectiveTemperature,
+        maxOutputTokens,
+        reasoning: effectiveReasoning,
+        timeoutMs: videoTimeoutMs,
+        fetchImpl,
+      });
+      console.error(
+        `[summarize:video] non-streaming video request completed for ${parsed.canonical}; ` +
+          `response length=${result.text.length} chars`,
+      );
+      return {
+        text: result.text,
+        canonicalModelId: parsed.canonical,
+        provider: parsed.provider,
+        usage: result.usage,
+      };
+    }
+    // For non-OpenAI providers, strip video_url parts and continue with normal path.
+    console.error(
+      `[summarize:video] stripping video_url parts for non-openai provider ${parsed.provider}/${parsed.model}`,
+    );
+    const strippedParts = prompt.interleavedParts
+      ? stripVideoUrlParts(prompt.interleavedParts)
+      : undefined;
+    prompt = { ...prompt, interleavedParts: strippedParts };
+  }
+
   const context = promptToContext(prompt);
 
   const resolveOpenAiConfig = (): OpenAiClientConfig =>
@@ -311,6 +424,7 @@ export async function generateTextWithModelId({
     const result = await completeSimple(model, context, {
       ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
       ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+      ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
       apiKey,
       signal,
     });
@@ -339,6 +453,7 @@ export async function generateTextWithModelId({
             ? { temperature: effectiveTemperature }
             : {}),
           ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+          ...(effectiveReasoning ? { reasoning: effectiveReasoning } : {}),
           apiKey,
           signal: controller.signal,
         });
@@ -429,6 +544,7 @@ export async function generateTextWithModelId({
           context,
           temperature: effectiveTemperature,
           maxOutputTokens,
+          reasoning: effectiveReasoning,
           signal: controller.signal,
         });
         return {
@@ -472,6 +588,7 @@ export async function streamTextWithModelId({
   prompt,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -486,6 +603,7 @@ export async function streamTextWithModelId({
   prompt: Prompt;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -501,13 +619,77 @@ export async function streamTextWithModelId({
   usage: Promise<LlmTokenUsage | null>;
   lastError: () => unknown;
 }> {
-  const context = promptToContext(prompt);
+  const parsed = parseGatewayStyleModelId(modelId);
+  const effectiveTemperature = resolveEffectiveTemperature({ parsed, temperature });
+  const effectiveReasoning = resolveEffectiveReasoning({ parsed, reasoning });
+
+  // When the prompt contains video_url parts and the provider speaks the OpenAI
+  // chat completions protocol (which includes OpenRouter), use a raw streaming
+  // fetch with video_url content parts.  The pi-ai SDK has no VideoContent type
+  // so the normal streaming path cannot serialise video parts.
+  if (hasVideoUrlParts(prompt) && parsed.provider === "openai") {
+    const openaiConfig = resolveOpenAiClientConfig({
+      apiKeys: {
+        openaiApiKey: apiKeys.openaiApiKey,
+        openrouterApiKey: apiKeys.openrouterApiKey,
+      },
+      forceOpenRouter,
+      openaiBaseUrlOverride,
+      forceChatCompletions,
+    });
+
+    const videoUrls = prompt
+      .interleavedParts!.filter((p) => p.kind === "video_url")
+      .map((p) => (p as { url: string }).url);
+    console.error(
+      `[summarize:video] streaming path detected ${videoUrls.length} video_url part(s) for ${parsed.canonical}; ` +
+        `using raw streaming fetch. URLs: ${videoUrls.join(", ")}`,
+    );
+
+    const videoTimeoutMs = Math.max(timeoutMs, VIDEO_MIN_TIMEOUT_MS);
+    console.error(
+      `[video-debug] streamTextWithModelId ROUTE: path=video/streaming, model=${parsed.canonical}, ` +
+        `reasoning=${effectiveReasoning ?? "none"}, timeout=${videoTimeoutMs}ms (original=${timeoutMs}ms, min=${VIDEO_MIN_TIMEOUT_MS}ms)`,
+    );
+    const streamResult = streamOpenAiTextWithVideo({
+      modelId: parsed.model,
+      openaiConfig,
+      system: prompt.system,
+      interleavedParts: prompt.interleavedParts!,
+      temperature: effectiveTemperature,
+      maxOutputTokens,
+      reasoning: effectiveReasoning,
+      timeoutMs: videoTimeoutMs,
+      fetchImpl,
+    });
+
+    return {
+      textStream: streamResult.textStream,
+      canonicalModelId: parsed.canonical,
+      provider: parsed.provider,
+      usage: streamResult.usage,
+      lastError: () => null,
+    };
+  }
+
+  // For non-openai providers (or prompts without video), strip video_url parts
+  // (which the pi-ai SDK cannot serialise) and continue with normal streaming.
+  if (hasVideoUrlParts(prompt)) {
+    console.error(
+      `[summarize:video] stripping video_url parts for non-openai provider ${parsed.provider}/${parsed.model}`,
+    );
+  }
+  const effectivePrompt = hasVideoUrlParts(prompt)
+    ? { ...prompt, interleavedParts: stripVideoUrlParts(prompt.interleavedParts!) }
+    : prompt;
+  const context = promptToContext(effectivePrompt);
   return streamTextWithContext({
     modelId,
     apiKeys,
     context,
     temperature,
     maxOutputTokens,
+    reasoning: effectiveReasoning,
     timeoutMs,
     fetchImpl,
     forceOpenRouter,
@@ -525,6 +707,7 @@ export async function streamTextWithContext({
   context,
   temperature,
   maxOutputTokens,
+  reasoning,
   timeoutMs,
   fetchImpl,
   forceOpenRouter,
@@ -539,6 +722,7 @@ export async function streamTextWithContext({
   context: Context;
   temperature?: number;
   maxOutputTokens?: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
   timeoutMs: number;
   fetchImpl: typeof fetch;
   forceOpenRouter?: boolean;
@@ -639,6 +823,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -677,6 +862,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -712,6 +898,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey,
         signal: controller.signal,
       });
@@ -774,6 +961,7 @@ export async function streamTextWithContext({
       const stream = streamSimple(model, context, {
         ...(typeof effectiveTemperature === "number" ? { temperature: effectiveTemperature } : {}),
         ...(typeof maxOutputTokens === "number" ? { maxTokens: maxOutputTokens } : {}),
+        ...(reasoning ? { reasoning } : {}),
         apiKey: openaiConfig.apiKey,
         signal: controller.signal,
       });

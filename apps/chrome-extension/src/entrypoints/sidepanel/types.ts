@@ -3,7 +3,7 @@ import type { SseSlidesData } from "../../../../../src/shared/sse-events.js";
 
 export type UiState = {
   panelOpen: boolean;
-  daemon: { ok: boolean; authed: boolean; error?: string };
+  daemon: { ok: boolean; authed: boolean; error?: string; version?: string; commit?: string };
   tab: { id: number | null; url: string | null; title: string | null };
   media: { hasVideo: boolean; hasAudio: boolean; hasCaptions: boolean } | null;
   stats: { pageWords: number | null; videoDurationSeconds: number | null };
@@ -20,6 +20,7 @@ export type UiState = {
     lineHeight: number;
     model: string;
     length: string;
+    videoDetailLevel: "summary" | "detailed";
     tokenPresent: boolean;
   };
   status: string;

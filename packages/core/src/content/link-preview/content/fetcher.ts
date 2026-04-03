@@ -119,6 +119,80 @@ export async function fetchHtmlDocument(
   }
 }
 
+const PDF_CONTENT_TYPE_PATTERN = /application\/pdf/i;
+
+export function isPdfContentTypeError(error: unknown): boolean {
+  return error instanceof Error && PDF_CONTENT_TYPE_PATTERN.test(error.message);
+}
+
+export interface PdfTextFetchResult {
+  text: string;
+  finalUrl: string;
+}
+
+export async function fetchPdfText(
+  fetchImpl: typeof fetch,
+  url: string,
+  {
+    timeoutMs,
+    onProgress,
+  }: { timeoutMs?: number; onProgress?: ((event: LinkPreviewProgressEvent) => void) | null } = {},
+): Promise<PdfTextFetchResult> {
+  onProgress?.({ kind: "fetch-html-start", url });
+
+  const controller = new AbortController();
+  const effectiveTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? timeoutMs
+      : DEFAULT_REQUEST_TIMEOUT_MS;
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, effectiveTimeoutMs);
+
+  try {
+    const response = await fetchImpl(url, {
+      headers: {
+        ...REQUEST_HEADERS,
+        Accept: "application/pdf,*/*;q=0.8",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PDF document (status ${response.status})`);
+    }
+
+    const finalUrl = response.url?.trim() || url;
+    const buffer = new Uint8Array(await response.arrayBuffer());
+
+    onProgress?.({
+      kind: "fetch-html-done",
+      url,
+      downloadedBytes: buffer.byteLength,
+      totalBytes: buffer.byteLength,
+    });
+
+    const { extractText } = await import("unpdf");
+    const { text } = await extractText(buffer, { mergePages: true });
+
+    if (!text || text.trim().length === 0) {
+      throw new Error(
+        "PDF appears to contain no extractable text (may be image-only or encrypted)",
+      );
+    }
+
+    return { text, finalUrl };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("Fetching PDF document timed out");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function fetchWithFirecrawl(
   url: string,
   scrapeWithFirecrawl: ScrapeWithFirecrawl | null,

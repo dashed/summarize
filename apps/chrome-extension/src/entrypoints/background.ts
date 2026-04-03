@@ -1,21 +1,25 @@
 import type { AssistantMessage, Message } from "@mariozechner/pi-ai";
 import { shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
 import { defineBackground } from "wxt/utils/define-background";
+import type { NativeInputPayload, NativeInputResponse } from "../automation/user-script-requests";
 import { parseSseEvent, type SseSlidesData } from "../../../../src/shared/sse-events.js";
 import {
-  deleteArtifact,
-  getArtifactRecord,
-  listArtifacts,
-  parseArtifact,
-  upsertArtifact,
-} from "../automation/artifacts-store";
+  handleArtifactsRequest,
+  handleNativeInputRequest,
+  isArtifactsRequest,
+  isNativeInputRequest,
+} from "../automation/user-script-requests";
 import { readAgentResponse } from "../lib/agent-response";
 import { buildChatPageContent } from "../lib/chat-context";
+import { exportYouTubeCookies } from "../lib/cookies";
 import { buildDaemonRequestBody, buildSummarizeRequestBody } from "../lib/daemon-payload";
 import { createDaemonRecovery, isDaemonUnreachableError } from "../lib/daemon-recovery";
+import { logDiagnostic, setDiagnosticsToken } from "../lib/diagnostics";
 import { logExtensionEvent } from "../lib/extension-logs";
+import { resolveChatExtractStatusLabel } from "../lib/extract-status";
 import { loadSettings, patchSettings } from "../lib/settings";
 import { parseSseStream } from "../lib/sse";
+import { urlsMatch } from "../lib/url-match";
 
 type PanelToBg =
   | { type: "panel:ready" }
@@ -32,12 +36,19 @@ type PanelToBg =
       requestId: string;
       summary?: string | null;
     }
+  | {
+      type: "panel:save-chat-history";
+      messages: Message[];
+      summary?: string | null;
+      model?: string | null;
+    }
   | { type: "panel:seek"; seconds: number }
   | { type: "panel:ping" }
   | { type: "panel:closed" }
   | { type: "panel:rememberUrl"; url: string }
   | { type: "panel:setAuto"; value: boolean }
   | { type: "panel:setLength"; value: string }
+  | { type: "panel:setVideoDetailLevel"; value: "summary" | "detailed" }
   | { type: "panel:slides-context"; requestId: string; url?: string }
   | { type: "panel:cache"; cache: PanelCachePayload }
   | { type: "panel:get-cache"; requestId: string; tabId: number; url: string }
@@ -90,28 +101,9 @@ type BgToHover =
   | { type: "hover:done"; requestId: string; url: string }
   | { type: "hover:error"; requestId: string; url: string; message: string };
 
-type NativeInputRequest = {
-  type: "automation:native-input";
-  payload: {
-    action: "click" | "type" | "press" | "keydown" | "keyup";
-    x?: number;
-    y?: number;
-    text?: string;
-    key?: string;
-  };
-};
-
-type NativeInputResponse = { ok: true } | { ok: false; error: string };
-type ArtifactsRequest = {
-  type: "automation:artifacts";
-  requestId: string;
-  action?: string;
-  payload?: unknown;
-};
-
 type UiState = {
   panelOpen: boolean;
-  daemon: { ok: boolean; authed: boolean; error?: string };
+  daemon: { ok: boolean; authed: boolean; error?: string; version?: string; commit?: string };
   tab: { id: number | null; url: string | null; title: string | null };
   media: { hasVideo: boolean; hasAudio: boolean; hasCaptions: boolean } | null;
   stats: { pageWords: number | null; videoDurationSeconds: number | null };
@@ -289,7 +281,12 @@ async function getActiveTab(windowId?: number): Promise<chrome.tabs.Tab | null> 
   return tab ?? null;
 }
 
-async function daemonHealth(): Promise<{ ok: boolean; error?: string }> {
+async function daemonHealth(): Promise<{
+  ok: boolean;
+  error?: string;
+  version?: string;
+  commit?: string;
+}> {
   for (let attempt = 0; attempt < DAEMON_STATUS_MAX_ATTEMPTS; attempt += 1) {
     try {
       const controller = new AbortController();
@@ -297,7 +294,16 @@ async function daemonHealth(): Promise<{ ok: boolean; error?: string }> {
       const res = await fetch("http://127.0.0.1:8787/health", { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
-      return { ok: true };
+      try {
+        const json = (await res.json()) as { version?: string; commit?: string };
+        return {
+          ok: true,
+          version: typeof json.version === "string" ? json.version : undefined,
+          commit: typeof json.commit === "string" ? json.commit : undefined,
+        };
+      } catch {
+        return { ok: true };
+      }
     } catch (err) {
       const shouldRetry = attempt < DAEMON_STATUS_MAX_ATTEMPTS - 1 && shouldRetryDaemon(err);
       if (shouldRetry) {
@@ -362,29 +368,6 @@ function friendlyFetchError(err: unknown, context: string): string {
     return `${context}: Failed to fetch (daemon unreachable or blocked by Chrome; try \`summarize daemon status\` and check ~/.summarize/logs/daemon.err.log)`;
   }
   return `${context}: ${message}`;
-}
-
-function normalizeUrl(value: string) {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-
-function urlsMatch(a: string, b: string) {
-  const left = normalizeUrl(a);
-  const right = normalizeUrl(b);
-  if (left === right) return true;
-  const boundaryMatch = (longer: string, shorter: string) => {
-    if (!longer.startsWith(shorter)) return false;
-    if (longer.length === shorter.length) return true;
-    const next = longer[shorter.length];
-    return next === "/" || next === "?" || next === "&";
-  };
-  return boundaryMatch(left, right) || boundaryMatch(right, left);
 }
 
 function isYouTubeWatchUrl(value: string | null | undefined): boolean {
@@ -601,7 +584,7 @@ function resolveKeyCode(key: string): { code: string; keyCode: number; text?: st
 
 async function dispatchNativeInput(
   tabId: number,
-  payload: NativeInputRequest["payload"],
+  payload: NativeInputPayload,
 ): Promise<NativeInputResponse> {
   const hasPermission = await chrome.permissions.contains({ permissions: ["debugger"] });
   if (!hasPermission) {
@@ -683,7 +666,54 @@ async function dispatchNativeInput(
   }
 }
 
+type UserScriptMessageListener = (
+  message: unknown,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response: unknown) => void,
+) => boolean | void;
+
+type RuntimeWithUserScriptMessaging = typeof chrome.runtime & {
+  onUserScriptMessage?: {
+    addListener(callback: UserScriptMessageListener): void;
+  };
+};
+
+function registerUserScriptMessageListener() {
+  const runtime = chrome.runtime as RuntimeWithUserScriptMessaging;
+  runtime.onUserScriptMessage?.addListener((raw, sender, sendResponse) => {
+    if (isNativeInputRequest(raw)) {
+      void handleNativeInputRequest({
+        request: raw,
+        tabId: sender.tab?.id,
+        dispatchNativeInput,
+      }).then((response) => {
+        try {
+          sendResponse(response);
+        } catch {
+          // ignore
+        }
+      });
+      return true;
+    }
+
+    if (isArtifactsRequest(raw)) {
+      void handleArtifactsRequest({
+        request: raw,
+        tabId: sender.tab?.id,
+      }).then((response) => {
+        try {
+          sendResponse(response);
+        } catch {
+          // ignore
+        }
+      });
+      return true;
+    }
+  });
+}
+
 export default defineBackground(() => {
+  registerUserScriptMessageListener();
   const panelSessions = new Map<number, PanelSession>();
   const lastMediaProbeByTab = new Map<number, string>();
   type CachedExtract = {
@@ -786,7 +816,7 @@ export default defineBackground(() => {
   const getCachedExtract = (tabId: number, url?: string | null) => {
     const cached = cachedExtracts.get(tabId) ?? null;
     if (!cached) return null;
-    if (url && cached.url !== url) {
+    if (url && !urlsMatch(cached.url, url)) {
       cachedExtracts.delete(tabId);
       return null;
     }
@@ -800,7 +830,7 @@ export default defineBackground(() => {
   const getPanelCache = (tabId: number, url?: string | null) => {
     const cached = panelCacheByTabId.get(tabId) ?? null;
     if (!cached) return null;
-    if (url && cached.url !== url) return null;
+    if (url && !urlsMatch(cached.url, url)) return null;
     return cached;
   };
 
@@ -855,10 +885,8 @@ export default defineBackground(() => {
     }
 
     const wantsSlides = settings.slidesEnabled && shouldPreferUrlMode(tab.url);
-    const urlStatusLabel = wantsSlides
-      ? "Extracting video + thumbnails…"
-      : "Extracting video transcript…";
-    sendStatus(session, urlStatusLabel);
+    const cookies = wantsSlides ? await exportYouTubeCookies() : null;
+    sendStatus(session, resolveChatExtractStatusLabel(preferUrl, wantsSlides));
     const extractTimeoutMs = wantsSlides ? 6 * 60_000 : 3 * 60_000;
     const extractController = new AbortController();
     const extractTimeout = setTimeout(() => {
@@ -908,6 +936,7 @@ export default defineBackground(() => {
           extractOnly: true,
           timestamps: true,
           ...(wantsSlides ? { slides: true } : {}),
+          ...(cookies ? { cookies } : {}),
           maxCharacters: null,
         }),
         signal: extractController.signal,
@@ -1008,7 +1037,13 @@ export default defineBackground(() => {
     }
     const state: UiState = {
       panelOpen: isPanelOpen(session),
-      daemon: { ok: health.ok, authed: authed.ok, error: health.error ?? authed.error },
+      daemon: {
+        ok: health.ok,
+        authed: authed.ok,
+        error: health.error ?? authed.error,
+        version: health.version,
+        commit: health.commit,
+      },
       tab: { id: tab?.id ?? null, url: tab?.url ?? null, title: tab?.title ?? null },
       media: cached?.media ?? null,
       stats: {
@@ -1029,6 +1064,7 @@ export default defineBackground(() => {
         lineHeight: settings.lineHeight,
         model: settings.model,
         length: settings.length,
+        videoDetailLevel: settings.videoDetailLevel,
         tokenPresent: Boolean(settings.token.trim()),
       },
       status,
@@ -1112,6 +1148,7 @@ export default defineBackground(() => {
     if (!isPanelOpen(session)) return;
 
     const settings = await loadSettings();
+    setDiagnosticsToken(settings.token?.trim() || null);
     const isManual = reason === "manual" || reason === "refresh" || reason === "length-change";
     if (!isManual && !settings.autoSummarize) return;
     if (!settings.token.trim()) {
@@ -1134,12 +1171,22 @@ export default defineBackground(() => {
       console.debug("[summarize][panel:bg]", payload);
     };
 
-    if (reason === "spa-nav" || reason === "tab-url-change") {
+    const isSpaNav = reason === "spa-nav" || reason === "tab-url-change";
+    if (isSpaNav) {
       await new Promise((resolve) => setTimeout(resolve, 220));
     }
 
     const tab = await getActiveTab(session.windowId);
     if (!tab?.id || !canSummarizeUrl(tab.url)) return;
+
+    logDiagnostic("background", "summarize-start", {
+      reason,
+      tabUrl: tab.url,
+      tabId: tab.id,
+      lastSummarizedUrl: session.lastSummarizedUrl ?? null,
+      inflightUrl: session.inflightUrl ?? null,
+      isManual,
+    }, { url: tab.url ?? undefined, tabId: tab.id });
 
     session.runController?.abort();
     const controller = new AbortController();
@@ -1168,6 +1215,7 @@ export default defineBackground(() => {
             mode: "url",
             extractOnly: true,
             timestamps: true,
+            videoDetailLevel: settings.videoDetailLevel,
             ...(opts?.refresh ? { noCache: true } : {}),
             maxCharacters: null,
             diagnostics: settings.extendedLogging ? { includeContent: true } : null,
@@ -1290,7 +1338,44 @@ export default defineBackground(() => {
       }
     }
 
+    // SPA content-change polling: After SPA navigation, the DOM may still
+    // show the previous page's content. Compare against the cached extract
+    // for this tab — if the text is identical, wait and re-extract.
+    if (isSpaNav && extracted.text && tab.id) {
+      const previousExtract = cachedExtracts.get(tab.id);
+      if (previousExtract?.text && previousExtract.text === extracted.text && previousExtract.text.length > 0) {
+        const SPA_POLL_DELAY_MS = 300;
+        const SPA_POLL_MAX_RETRIES = 5;
+        for (let attempt = 0; attempt < SPA_POLL_MAX_RETRIES; attempt++) {
+          if (controller.signal.aborted) break;
+          await new Promise((resolve) => setTimeout(resolve, SPA_POLL_DELAY_MS));
+          const poll = await extractFromTab(tab.id, settings.maxChars, {
+            timeoutMs: 4_000,
+            log: (event, detail) => logPanel(event, detail),
+          });
+          if (!poll.ok) continue;
+          if (poll.data.text !== previousExtract.text) {
+            extracted = poll.data;
+            logDiagnostic("background", "spa-poll-content-changed", {
+              attempt: attempt + 1,
+              tabUrl: tab.url,
+              newTextLength: poll.data.text?.length ?? 0,
+              previousTextLength: previousExtract.text.length,
+            }, { url: tab.url ?? undefined, tabId: tab.id });
+            break;
+          }
+        }
+      }
+    }
+
     const extractedMatchesTab = tab.url && extracted.url ? urlsMatch(tab.url, extracted.url) : true;
+    logDiagnostic("background", "extract-resolved", {
+      reason,
+      tabUrl: tab.url,
+      extractedUrl: extracted.url,
+      extractedMatchesTab,
+      textLength: extracted.text?.length ?? 0,
+    }, { url: tab.url ?? undefined, tabId: tab.id });
     const resolvedExtracted =
       tab.url && !extractedMatchesTab
         ? {
@@ -1336,6 +1421,7 @@ export default defineBackground(() => {
       (effectiveInputMode === "video" ||
         resolvedPayload.media?.hasVideo === true ||
         shouldPreferUrlMode(resolvedPayload.url));
+    const summarizeCookies = wantsSlides ? await exportYouTubeCookies() : null;
     const wantsParallelSlides = wantsSlides && settings.slidesParallel;
     const summaryTimestamps = wantsSummaryTimestamps || (wantsSlides && !wantsParallelSlides);
     const slidesTimestamps = wantsSummaryTimestamps || wantsSlides;
@@ -1417,6 +1503,7 @@ export default defineBackground(() => {
         inputMode: effectiveInputMode,
         timestamps: summaryTimestamps,
         slides: summarySlides,
+        cookies: summarizeCookies,
       });
       logPanel("summarize:request", {
         url: resolvedPayload.url,
@@ -1465,6 +1552,7 @@ export default defineBackground(() => {
             inputMode: effectiveInputMode,
             timestamps: slidesTimestamps,
             slides: slidesConfig,
+            cookies: summarizeCookies,
           });
           logPanel("slides:request", { url: resolvedPayload.url });
           const res = await fetch("http://127.0.0.1:8787/v1/summarize", {
@@ -1851,6 +1939,12 @@ export default defineBackground(() => {
                   requestId: agentPayload.requestId,
                   text: event.text,
                 });
+              } else if (event.type === "systemPrompt") {
+                void send(session, {
+                  type: "agent:systemPrompt",
+                  requestId: agentPayload.requestId,
+                  systemPrompt: event.systemPrompt,
+                });
               } else if (event.type === "assistant") {
                 sawAssistant = true;
                 void send(session, {
@@ -2014,6 +2108,93 @@ export default defineBackground(() => {
           }
         })();
         break;
+      case "panel:save-chat-history":
+        void (async () => {
+          const payload = raw as {
+            messages?: Message[];
+            summary?: string | null;
+            model?: string | null;
+          };
+          if (!Array.isArray(payload.messages) || payload.messages.length === 0) {
+            return;
+          }
+
+          const settings = await loadSettings();
+          if (!settings.chatEnabled || !settings.token.trim()) {
+            return;
+          }
+
+          const tab = await getActiveTab(session.windowId);
+          if (!tab?.id || !canSummarizeUrl(tab.url)) {
+            return;
+          }
+
+          let cachedExtract: CachedExtract;
+          try {
+            cachedExtract = await ensureChatExtract(session, tab, settings);
+          } catch {
+            return;
+          }
+
+          const summaryText = typeof payload.summary === "string" ? payload.summary.trim() : "";
+          const pageContent = buildChatPageContent({
+            transcript: cachedExtract.transcriptTimedText ?? cachedExtract.text,
+            summary: summaryText,
+            summaryCap: settings.maxChars,
+            metadata: {
+              url: cachedExtract.url,
+              title: cachedExtract.title,
+              source: cachedExtract.source,
+              extractionStrategy:
+                cachedExtract.source === "page"
+                  ? "readability (content script)"
+                  : (cachedExtract.diagnostics?.strategy ?? null),
+              markdownProvider: cachedExtract.diagnostics?.markdown?.used
+                ? (cachedExtract.diagnostics?.markdown?.provider ?? "unknown")
+                : null,
+              firecrawlUsed: cachedExtract.diagnostics?.firecrawl?.used ?? null,
+              transcriptSource: cachedExtract.transcriptSource,
+              transcriptionProvider: cachedExtract.transcriptionProvider,
+              transcriptCache: cachedExtract.diagnostics?.transcript?.cacheStatus ?? null,
+              attemptedTranscriptProviders:
+                cachedExtract.diagnostics?.transcript?.attemptedProviders ?? null,
+              mediaDurationSeconds: cachedExtract.mediaDurationSeconds,
+              totalCharacters: cachedExtract.totalCharacters,
+              wordCount: cachedExtract.wordCount,
+              transcriptCharacters: cachedExtract.transcriptCharacters,
+              transcriptWordCount: cachedExtract.transcriptWordCount,
+              transcriptLines: cachedExtract.transcriptLines,
+              transcriptHasTimestamps: Boolean(cachedExtract.transcriptTimedText),
+              truncated: cachedExtract.truncated,
+            },
+          });
+          const cacheContent = cachedExtract.transcriptTimedText ?? cachedExtract.text;
+
+          try {
+            await fetch("http://127.0.0.1:8787/v1/agent/history/save", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${settings.token.trim()}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                url: cachedExtract.url,
+                title: cachedExtract.title,
+                pageContent,
+                cacheContent,
+                automationEnabled: settings.automationEnabled,
+                messages: payload.messages,
+                model:
+                  typeof payload.model === "string" && payload.model.trim().length > 0
+                    ? payload.model
+                    : settings.model,
+              }),
+            });
+          } catch {
+            // ignore fire-and-forget persistence failures
+          }
+        })();
+        break;
       case "panel:ping":
         void emitState(session, "", { checkRecovery: true });
         break;
@@ -2036,6 +2217,12 @@ export default defineBackground(() => {
           await patchSettings({ length: next });
           void emitState(session, "");
           void summarizeActiveTab(session, "length-change");
+        })();
+        break;
+      case "panel:setVideoDetailLevel":
+        void (async () => {
+          const next = (raw as { value: "summary" | "detailed" }).value;
+          await patchSettings({ videoDetailLevel: next });
         })();
         break;
       case "panel:slides-context":
@@ -2196,132 +2383,12 @@ export default defineBackground(() => {
   });
 
   chrome.runtime.onMessage.addListener(
-    (
-      raw: HoverToBg | NativeInputRequest | ArtifactsRequest,
-      sender,
-      sendResponse,
-    ): boolean | undefined => {
+    (raw: HoverToBg, sender, sendResponse): boolean | undefined => {
       if (!raw || typeof raw !== "object" || typeof (raw as { type?: unknown }).type !== "string") {
         return;
       }
 
       const type = (raw as { type: string }).type;
-      if (type === "automation:native-input") {
-        const msg = raw as NativeInputRequest;
-        void (async () => {
-          const tabId = sender.tab?.id;
-          if (!tabId) {
-            try {
-              sendResponse({
-                ok: false,
-                error: "Missing sender tab",
-              } satisfies NativeInputResponse);
-            } catch {
-              // ignore
-            }
-            return;
-          }
-          const result = await dispatchNativeInput(tabId, msg.payload);
-          try {
-            sendResponse(result);
-          } catch {
-            // ignore
-          }
-        })();
-        return true;
-      }
-      if (type === "automation:artifacts") {
-        const msg = raw as ArtifactsRequest;
-        void (async () => {
-          const tabId = sender.tab?.id;
-          if (!tabId) {
-            try {
-              sendResponse({ ok: false, error: "Missing sender tab" });
-            } catch {
-              // ignore
-            }
-            return;
-          }
-
-          const payload = (msg.payload ?? {}) as {
-            fileName?: string;
-            content?: unknown;
-            mimeType?: string;
-            asBase64?: boolean;
-          };
-
-          try {
-            if (msg.action === "listArtifacts") {
-              const records = await listArtifacts(tabId);
-              sendResponse({
-                ok: true,
-                result: records.map(({ fileName, mimeType, size, updatedAt }) => ({
-                  fileName,
-                  mimeType,
-                  size,
-                  updatedAt,
-                })),
-              });
-              return;
-            }
-
-            if (msg.action === "getArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const record = await getArtifactRecord(tabId, payload.fileName);
-              if (!record) throw new Error(`Artifact not found: ${payload.fileName}`);
-              const isText =
-                record.mimeType.startsWith("text/") ||
-                record.mimeType === "application/json" ||
-                record.fileName.endsWith(".json");
-              const value = payload.asBase64 ? record : isText ? parseArtifact(record) : record;
-              sendResponse({ ok: true, result: value });
-              return;
-            }
-
-            if (msg.action === "createOrUpdateArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const record = await upsertArtifact(tabId, {
-                fileName: payload.fileName,
-                content: payload.content,
-                mimeType: payload.mimeType,
-                contentBase64:
-                  typeof payload.content === "object" &&
-                  payload.content &&
-                  "contentBase64" in payload.content
-                    ? (payload.content as { contentBase64?: string }).contentBase64
-                    : undefined,
-              });
-              sendResponse({
-                ok: true,
-                result: {
-                  fileName: record.fileName,
-                  mimeType: record.mimeType,
-                  size: record.size,
-                  updatedAt: record.updatedAt,
-                },
-              });
-              return;
-            }
-
-            if (msg.action === "deleteArtifact") {
-              if (!payload.fileName) throw new Error("Missing fileName");
-              const deleted = await deleteArtifact(tabId, payload.fileName);
-              sendResponse({ ok: true, result: { ok: deleted } });
-              return;
-            }
-
-            throw new Error(`Unknown artifact action: ${msg.action ?? "unknown"}`);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            try {
-              sendResponse({ ok: false, error: message });
-            } catch {
-              // ignore
-            }
-          }
-        })();
-        return true;
-      }
       if (type === "hover:summarize") {
         const msg = raw as HoverToBg & { type: "hover:summarize" };
         void (async () => {
@@ -2372,8 +2439,12 @@ export default defineBackground(() => {
       const session = getPanelSession(windowId);
       if (!session) return;
       const now = Date.now();
-      if (now - session.lastNavAt < 700) return;
+      if (now - session.lastNavAt < 700) {
+        logDiagnostic("background", "spa-nav-debounced", { url: details.url, tabId: details.tabId, elapsed: now - session.lastNavAt }, { url: details.url, tabId: details.tabId });
+        return;
+      }
       session.lastNavAt = now;
+      logDiagnostic("background", "spa-nav", { url: details.url, tabId: details.tabId, previousUrl: session.lastSummarizedUrl ?? null }, { url: details.url, tabId: details.tabId });
       void emitState(session, "");
       void summarizeActiveTab(session, "spa-nav");
     })();
@@ -2395,9 +2466,11 @@ export default defineBackground(() => {
       void emitState(session, "");
     }
     if (typeof changeInfo.url === "string") {
+      logDiagnostic("background", "tab-url-change", { url: changeInfo.url, tabId: tab.id, previousUrl: session.lastSummarizedUrl ?? null }, { url: changeInfo.url, tabId: tab.id ?? undefined });
       void summarizeActiveTab(session, "tab-url-change");
     }
     if (changeInfo.status === "complete") {
+      logDiagnostic("background", "tab-load-complete", { url: tab.url, tabId: tab.id }, { url: tab.url ?? undefined, tabId: tab.id ?? undefined });
       void emitState(session, "");
       void summarizeActiveTab(session, "tab-updated");
     }

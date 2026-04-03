@@ -1,11 +1,12 @@
 import { countTokens } from "gpt-tokenizer";
 import { createMarkdownStreamer, render as renderMarkdownAnsi } from "markdansi";
 import type { CliProvider } from "../config.js";
-import type { Prompt } from "../llm/prompt.js";
 import type { ModelAttempt, ModelMeta } from "./types.js";
 import { isCliDisabled, runCliModel } from "../llm/cli.js";
 import { streamTextWithModelId } from "../llm/generate-text.js";
 import { parseGatewayStyleModelId } from "../llm/model-id.js";
+import { type Prompt, hasVideoUrlParts, stripVideoUrlParts } from "../llm/prompt.js";
+import { modelSupportsImages } from "../llm/providers/shared.js";
 import { formatCompactCount } from "../tty/format.js";
 import { createRetryLogger, writeVerbose } from "./logging.js";
 import { prepareMarkdownForTerminalStreaming } from "./markdown.js";
@@ -126,7 +127,8 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       return deps.keyFlags.openrouterConfigured;
     }
     if (requiredEnv === "OPENAI_API_KEY") {
-      return Boolean(deps.apiKeys.openaiApiKey);
+      // OpenRouter can proxy openai/ models, so accept either key.
+      return Boolean(deps.apiKeys.openaiApiKey) || deps.keyFlags.openrouterConfigured;
     }
     if (requiredEnv === "NVIDIA_API_KEY") {
       return Boolean(deps.nvidia.apiKey);
@@ -256,13 +258,87 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       );
     }
     const parsedModelEffective = parseGatewayStyleModelId(modelResolution.modelId);
+
+    // Strip image attachments when the resolved model does not support images,
+    // unless the user forces multimodal via SUMMARIZE_SLIDES_MULTIMODAL=true.
+    const hasImageAttachments = prompt.attachments?.some((a) => a.kind === "image") ?? false;
+    const envMultimodal = deps.envForRun.SUMMARIZE_SLIDES_MULTIMODAL?.toLowerCase();
+    const multimodalForced = envMultimodal === "true" || envMultimodal === "1";
+    const multimodalDisabled = envMultimodal === "false" || envMultimodal === "0";
+    const effectivePrompt: Prompt = (() => {
+      if (!hasImageAttachments) return prompt;
+      if (multimodalDisabled) {
+        return { ...prompt, attachments: undefined };
+      }
+      if (multimodalForced) return prompt;
+      const supportsImages = modelSupportsImages(
+        parsedModelEffective.provider,
+        parsedModelEffective.model,
+      );
+      if (!supportsImages) {
+        if (deps.verbose) {
+          writeVerbose(
+            deps.stderr,
+            deps.verbose,
+            `model ${parsedModelEffective.canonical} does not support images; falling back to text-only slides`,
+            deps.verboseColor,
+            deps.envForRun,
+          );
+        }
+        return { ...prompt, attachments: undefined };
+      }
+      return prompt;
+    })();
+
+    // Strip video_url parts from interleaved content when video input is
+    // disabled via SUMMARIZE_SLIDES_VIDEO=false (or the model is text-only).
+    const promptAfterVideoGating: Prompt = (() => {
+      const hasVideo = hasVideoUrlParts(effectivePrompt);
+      if (!hasVideo) return effectivePrompt;
+      const envVideo = deps.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
+      const videoDisabled = envVideo === "false" || envVideo === "0";
+      const videoUrls =
+        effectivePrompt.interleavedParts
+          ?.filter((p) => p.kind === "video_url")
+          .map((p) => (p as { url: string }).url) ?? [];
+      if (videoDisabled) {
+        writeVerbose(
+          deps.stderr,
+          deps.verbose,
+          `video gating: stripping ${videoUrls.length} video_url part(s) (SUMMARIZE_SLIDES_VIDEO=${envVideo})`,
+          deps.verboseColor,
+          deps.envForRun,
+        );
+        console.error(
+          `[summarize:video] video gating DISABLED (SUMMARIZE_SLIDES_VIDEO=${envVideo}); ` +
+            `stripping ${videoUrls.length} video_url part(s)`,
+        );
+        const stripped = effectivePrompt.interleavedParts
+          ? stripVideoUrlParts(effectivePrompt.interleavedParts)
+          : undefined;
+        return { ...effectivePrompt, interleavedParts: stripped };
+      }
+      writeVerbose(
+        deps.stderr,
+        deps.verbose,
+        `video gating: passing ${videoUrls.length} video_url part(s) to LLM: ${videoUrls.join(", ")}`,
+        deps.verboseColor,
+        deps.envForRun,
+      );
+      console.error(
+        `[summarize:video] video gating ENABLED (SUMMARIZE_SLIDES_VIDEO=${envVideo ?? "unset"}); ` +
+          `passing ${videoUrls.length} video_url part(s): ${videoUrls.join(", ")}`,
+      );
+      return effectivePrompt;
+    })();
+
     const streamingEnabledForCall =
       allowStreaming &&
       deps.streamingEnabled &&
       !modelResolution.forceStreamOff &&
       canStream({
         provider: parsedModelEffective.provider,
-        prompt,
+        prompt: promptAfterVideoGating,
         transport: attempt.transport === "openrouter" ? "openrouter" : "native",
       });
     const forceChatCompletions =
@@ -279,9 +355,9 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
       typeof maxInputTokensForCall === "number" &&
       Number.isFinite(maxInputTokensForCall) &&
       maxInputTokensForCall > 0 &&
-      (prompt.attachments?.length ?? 0) === 0
+      (promptAfterVideoGating.attachments?.length ?? 0) === 0
     ) {
-      const tokenCount = countTokens(prompt.userText);
+      const tokenCount = countTokens(promptAfterVideoGating.userText);
       if (tokenCount > maxInputTokensForCall) {
         throw new Error(
           `Input token count (${formatCompactCount(tokenCount)}) exceeds model input limit (${formatCompactCount(maxInputTokensForCall)}). Tokenized with GPT tokenizer; prompt included.`,
@@ -292,7 +368,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
     if (!streamingEnabledForCall) {
       const result = await summarizeWithModelId({
         modelId: parsedModelEffective.canonical,
-        prompt,
+        prompt: promptAfterVideoGating,
         maxOutputTokens: maxOutputTokensForCall ?? undefined,
         timeoutMs: deps.timeoutMs,
         fetchImpl: deps.trackedFetch,
@@ -356,7 +432,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
         googleBaseUrlOverride: deps.providerBaseUrls.google,
         xaiBaseUrlOverride: deps.providerBaseUrls.xai,
         forceChatCompletions,
-        prompt,
+        prompt: promptAfterVideoGating,
         temperature: 0,
         maxOutputTokens: maxOutputTokensForCall ?? undefined,
         timeoutMs: deps.timeoutMs,
@@ -373,7 +449,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
         );
         const result = await summarizeWithModelId({
           modelId: parsedModelEffective.canonical,
-          prompt,
+          prompt: promptAfterVideoGating,
           maxOutputTokens: maxOutputTokensForCall ?? undefined,
           timeoutMs: deps.timeoutMs,
           fetchImpl: deps.trackedFetch,
@@ -414,7 +490,7 @@ export function createSummaryEngine(deps: SummaryEngineDeps) {
         );
         const result = await summarizeWithModelId({
           modelId: parsedModelEffective.canonical,
-          prompt,
+          prompt: promptAfterVideoGating,
           maxOutputTokens: maxOutputTokensForCall ?? undefined,
           timeoutMs: deps.timeoutMs,
           fetchImpl: deps.trackedFetch,

@@ -299,7 +299,9 @@ export async function runUrlFlow({
           env: io.env,
         });
         if (cacheKey && cacheStore) {
-          cacheStore.setJson("extract", cacheKey, extracted, cacheState.ttlMs);
+          cacheStore.setJson("extract", cacheKey, extracted, cacheState.ttlMs, {
+            url: targetUrl,
+          });
           writeVerbose(
             io.stderr,
             flags.verbose,
@@ -511,8 +513,10 @@ export async function runUrlFlow({
           timeoutMs: flags.timeoutMs,
           ytDlpPath: model.apiStatus.ytDlpPath,
           ytDlpCookiesFromBrowser: model.apiStatus.ytDlpCookiesFromBrowser,
+          ytDlpCookiesFile: model.apiStatus.ytDlpCookiesFile,
           ffmpegPath: null,
           tesseractPath: null,
+          openrouterApiKey: model.apiStatus.openrouterApiKey,
           hooks: {
             onSlideChunk: (chunk) => ctx.hooks.onSlideChunk?.(chunk),
             onSlidesTimeline: (timeline) => {
@@ -529,7 +533,9 @@ export async function runUrlFlow({
             `Slides: done (${slidesExtracted.slides.length.toString()} slides) 100%`,
           );
           if (slidesCacheKey && cacheStore) {
-            cacheStore.setJson("slides", slidesCacheKey, slidesExtracted, cacheState.ttlMs);
+            cacheStore.setJson("slides", slidesCacheKey, slidesExtracted, cacheState.ttlMs, {
+              url: source.url,
+            });
             writeVerbose(
               io.stderr,
               flags.verbose,
@@ -653,6 +659,8 @@ export async function runUrlFlow({
             sourceKind: "asset-url",
             sourceLabel: loadedVideo.sourceLabel,
             attachment: loadedVideo.attachment,
+            url,
+            title: extracted.title ?? null,
             onModelChosen: (modelId) => {
               chosenModel = modelId;
               hooks.onModelChosen?.(modelId);
@@ -705,6 +713,7 @@ export async function runUrlFlow({
       lengthInstruction: flags.lengthInstruction ?? null,
       languageInstruction: flags.languageInstruction ?? null,
       slides: slidesForPrompt ?? slidesExtracted ?? null,
+      videoDetailLevel: flags.videoDetailLevel ?? null,
     });
 
     // Whisper transcription costs need to be folded into the finish line totals.

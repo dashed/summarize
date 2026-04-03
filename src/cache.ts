@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, sep as pathSep, resolve as resolvePath } fro
 import type { TranscriptCache, TranscriptSource } from "./content/index.js";
 import type { LengthArg } from "./flags.js";
 import type { OutputLanguage } from "./language.js";
+import { buildHistoryUrlMetadata } from "./shared/history.js";
 
 export type CacheKind = "extract" | "summary" | "transcript" | "chat" | "slides";
 
@@ -24,7 +25,7 @@ type SqliteStatement = {
   run: (...args: unknown[]) => { changes?: number } | unknown;
 };
 
-type SqliteDatabase = {
+export type SqliteDatabase = {
   exec: (sql: string) => void;
   prepare: (sql: string) => SqliteStatement;
   close?: () => void;
@@ -55,11 +56,48 @@ function normalizeTranscriptSource(value: unknown): TranscriptSource | null {
     : null;
 }
 
+export type CacheMetadata = Record<string, unknown>;
+
+export type CacheEntryInfo = {
+  key: string;
+  created_at: number;
+  last_accessed_at: number;
+  size_bytes: number;
+  metadata: CacheMetadata | null;
+};
+
 export type CacheStore = {
   getText: (kind: CacheKind, key: string) => string | null;
   getJson: <T>(kind: CacheKind, key: string) => T | null;
-  setText: (kind: CacheKind, key: string, value: string, ttlMs: number | null) => void;
-  setJson: (kind: CacheKind, key: string, value: unknown, ttlMs: number | null) => void;
+  setText: (
+    kind: CacheKind,
+    key: string,
+    value: string,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => void;
+  setJson: (
+    kind: CacheKind,
+    key: string,
+    value: unknown,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => void;
+  listEntries: (
+    kind: CacheKind,
+    opts?: {
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+      filterUrl?: string;
+      filterMode?: "prefix" | "canonical";
+    },
+  ) => CacheEntryInfo[];
+  getEntryWithMeta: (
+    kind: CacheKind,
+    key: string,
+  ) => { value: string; created_at: number; metadata: CacheMetadata | null } | null;
+  deleteEntry: (kind: CacheKind, key: string) => boolean;
   clear: () => void;
   close: () => void;
   transcriptCache: TranscriptCache;
@@ -105,7 +143,7 @@ const installSqliteWarningFilter = () => {
   }) as typeof process.emitWarning;
 };
 
-async function openSqlite(path: string): Promise<SqliteDatabase> {
+export async function openSqlite(path: string): Promise<SqliteDatabase> {
   if (isBun) {
     const mod = (await import("bun:sqlite")) as { Database: new (path: string) => SqliteDatabase };
     return new mod.Database(path);
@@ -215,6 +253,13 @@ export async function createCacheStore({
   db.exec("CREATE INDEX IF NOT EXISTS idx_cache_accessed ON cache_entries(last_accessed_at)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache_entries(expires_at)");
 
+  // Migration: add metadata column for existing databases
+  try {
+    db.exec("ALTER TABLE cache_entries ADD COLUMN metadata TEXT");
+  } catch {
+    // Column already exists — ignore
+  }
+
   const stmtGet = db.prepare(
     "SELECT value, expires_at, size_bytes FROM cache_entries WHERE kind = ? AND key = ?",
   );
@@ -227,14 +272,15 @@ export async function createCacheStore({
   );
   const stmtUpsert = db.prepare(`
     INSERT INTO cache_entries (
-      kind, key, value, size_bytes, created_at, last_accessed_at, expires_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      kind, key, value, size_bytes, created_at, last_accessed_at, expires_at, metadata
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(kind, key) DO UPDATE SET
       value = excluded.value,
       size_bytes = excluded.size_bytes,
       created_at = excluded.created_at,
       last_accessed_at = excluded.last_accessed_at,
-      expires_at = excluded.expires_at
+      expires_at = excluded.expires_at,
+      metadata = excluded.metadata
   `);
   const stmtTotalSize = db.prepare(
     "SELECT COALESCE(SUM(size_bytes), 0) AS total FROM cache_entries",
@@ -243,6 +289,79 @@ export async function createCacheStore({
     "SELECT kind, key, size_bytes FROM cache_entries ORDER BY last_accessed_at ASC LIMIT ?",
   );
   const stmtClear = db.prepare("DELETE FROM cache_entries");
+  const stmtList = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrlPrefix = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND COALESCE(json_extract(metadata, '$.historyUrl'), json_extract(metadata, '$.url')) LIKE ? || '%'
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrlPrefixAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND COALESCE(json_extract(metadata, '$.historyUrl'), json_extract(metadata, '$.url')) LIKE ? || '%'
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrl = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND (
+        json_extract(metadata, '$.historyUrl') = ?
+        OR (
+          json_extract(metadata, '$.historyUrl') IS NULL
+          AND (
+            json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') LIKE ? || '?%'
+            OR json_extract(metadata, '$.url') LIKE ? || '&%'
+            OR json_extract(metadata, '$.url') LIKE ? || '#%'
+          )
+        )
+      )
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtListByUrlAsc = db.prepare(`
+    SELECT key, created_at, last_accessed_at, size_bytes, metadata
+    FROM cache_entries
+    WHERE kind = ? AND (expires_at IS NULL OR expires_at > ?)
+      AND (
+        json_extract(metadata, '$.historyUrl') = ?
+        OR (
+          json_extract(metadata, '$.historyUrl') IS NULL
+          AND (
+            json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') = ?
+            OR json_extract(metadata, '$.url') LIKE ? || '?%'
+            OR json_extract(metadata, '$.url') LIKE ? || '&%'
+            OR json_extract(metadata, '$.url') LIKE ? || '#%'
+          )
+        )
+      )
+    ORDER BY created_at ASC
+    LIMIT ? OFFSET ?
+  `);
+  const stmtGetWithMeta = db.prepare(
+    "SELECT value, created_at, expires_at, metadata FROM cache_entries WHERE kind = ? AND key = ?",
+  );
 
   const sweepExpired = (now: number) => {
     stmtDeleteExpired.run(now);
@@ -305,17 +424,30 @@ export async function createCacheStore({
     }
   };
 
-  const setText = (kind: CacheKind, key: string, value: string, ttlMs: number | null) => {
+  const setText = (
+    kind: CacheKind,
+    key: string,
+    value: string,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => {
     const now = Date.now();
     sweepExpired(now);
     const expiresAt = typeof ttlMs === "number" ? now + ttlMs : null;
     const sizeBytes = Buffer.byteLength(value, "utf8");
-    stmtUpsert.run(kind, key, value, sizeBytes, now, now, expiresAt);
+    const metaJson = metadata ? JSON.stringify(metadata) : null;
+    stmtUpsert.run(kind, key, value, sizeBytes, now, now, expiresAt, metaJson);
     enforceSize();
   };
 
-  const setJson = (kind: CacheKind, key: string, value: unknown, ttlMs: number | null) => {
-    setText(kind, key, JSON.stringify(value), ttlMs);
+  const setJson = (
+    kind: CacheKind,
+    key: string,
+    value: unknown,
+    ttlMs: number | null,
+    metadata?: CacheMetadata | null,
+  ) => {
+    setText(kind, key, JSON.stringify(value), ttlMs, metadata);
   };
 
   const clear = () => {
@@ -393,7 +525,104 @@ export async function createCacheStore({
     },
   };
 
-  return { getText, getJson, setText, setJson, clear, close, transcriptCache };
+  const parseMetadata = (raw: unknown): CacheMetadata | null => {
+    if (typeof raw !== "string" || !raw) return null;
+    try {
+      return JSON.parse(raw) as CacheMetadata;
+    } catch {
+      return null;
+    }
+  };
+
+  const listEntries = (
+    kind: CacheKind,
+    opts?: {
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+      filterUrl?: string;
+      filterMode?: "prefix" | "canonical";
+    },
+  ): CacheEntryInfo[] => {
+    const now = Date.now();
+    const limit = opts?.limit ?? 100;
+    const offset = opts?.offset ?? 0;
+    const filterUrl = opts?.filterUrl;
+    let rows: Array<{
+      key: string;
+      created_at: number;
+      last_accessed_at: number;
+      size_bytes: number;
+      metadata: string | null;
+    }>;
+    if (filterUrl) {
+      if (opts?.filterMode === "canonical") {
+        const stmt = opts?.order === "asc" ? stmtListByUrlAsc : stmtListByUrl;
+        const canonicalFilterUrl = buildHistoryUrlMetadata(filterUrl) ?? filterUrl;
+        rows = stmt.all(
+          kind,
+          now,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          filterUrl,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          canonicalFilterUrl,
+          limit,
+          offset,
+        ) as typeof rows;
+      } else {
+        const stmt = opts?.order === "asc" ? stmtListByUrlPrefixAsc : stmtListByUrlPrefix;
+        rows = stmt.all(kind, now, filterUrl, limit, offset) as typeof rows;
+      }
+    } else {
+      const stmt = opts?.order === "asc" ? stmtListAsc : stmtList;
+      rows = stmt.all(kind, now, limit, offset) as typeof rows;
+    }
+    return rows.map((row) => ({
+      key: row.key,
+      created_at: row.created_at,
+      last_accessed_at: row.last_accessed_at,
+      size_bytes: row.size_bytes,
+      metadata: parseMetadata(row.metadata),
+    }));
+  };
+
+  const getEntryWithMeta = (
+    kind: CacheKind,
+    key: string,
+  ): { value: string; created_at: number; metadata: CacheMetadata | null } | null => {
+    const now = Date.now();
+    const row = stmtGetWithMeta.get(kind, key) as
+      | { value: string; created_at: number; expires_at: number | null; metadata: string | null }
+      | undefined;
+    if (!row) return null;
+    if (typeof row.expires_at === "number" && row.expires_at <= now) return null;
+    stmtTouch.run(now, kind, key);
+    return {
+      value: row.value,
+      created_at: row.created_at,
+      metadata: parseMetadata(row.metadata),
+    };
+  };
+
+  const deleteEntry = (kind: CacheKind, key: string): boolean => {
+    const result = stmtDelete.run(kind, key) as { changes: number };
+    return result.changes > 0;
+  };
+
+  return {
+    getText,
+    getJson,
+    setText,
+    setJson,
+    listEntries,
+    getEntryWithMeta,
+    deleteEntry,
+    clear,
+    close,
+    transcriptCache,
+  };
 }
 
 export function clearCacheFiles(path: string) {
@@ -455,12 +684,14 @@ export function buildSummaryCacheKey({
   model,
   lengthKey,
   languageKey,
+  url,
 }: {
   contentHash: string;
   promptHash: string;
   model: string;
   lengthKey: string;
   languageKey: string;
+  url?: string | null;
 }): string {
   return hashJson({
     contentHash,
@@ -468,6 +699,9 @@ export function buildSummaryCacheKey({
     model,
     lengthKey,
     languageKey,
+    // Include URL to prevent cache collisions when different pages
+    // produce identical extracted text (e.g. Reddit SPA navigation).
+    ...(url ? { url } : {}),
     formatVersion: CACHE_FORMAT_VERSION,
   });
 }

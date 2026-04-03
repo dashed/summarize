@@ -1,5 +1,6 @@
 import type { PanelPhase } from "./types";
 import { splitStatusPercent } from "../../lib/status";
+import { resolveStage, clampProgress } from "./progress-stages";
 
 type HeaderState = {
   phase: PanelPhase;
@@ -14,6 +15,12 @@ export type HeaderController = {
   stopProgress: () => void;
   setProgressOverride: (next: boolean) => void;
   updateHeaderOffset: () => void;
+  /** Reset the tracked progress to 0 (e.g. on new summarization). */
+  resetProgress: () => void;
+  /** Get current tracked progress (0–100). */
+  getProgress: () => number;
+  /** Seed tracked progress to a specific value (e.g. on tab-restore). */
+  setProgress: (value: number) => void;
 };
 
 export function createHeaderController({
@@ -42,6 +49,8 @@ export function createHeaderController({
   let lastIsIndeterminate = false;
   let lastProgress = "";
   let lastProgressDisplay = "";
+  /** Monotonically increasing stage-based progress (0–100). */
+  let trackedProgress = 0;
 
   const shouldAllowProgress = (force = false) =>
     force || progressOverride || getState().summaryFromCache !== true;
@@ -77,7 +86,6 @@ export function createHeaderController({
     const split = showStatus
       ? splitStatusPercent(trimmed)
       : { text: "", percent: null as string | null };
-    const percentNum = split.percent ? Number.parseInt(split.percent, 10) : null;
     const statusLabel = split.text || trimmed;
     const isError =
       showStatus &&
@@ -92,19 +100,16 @@ export function createHeaderController({
       lastTitle = baseTitle;
     }
 
-    if (
-      !isError &&
-      percentNum != null &&
-      Number.isFinite(percentNum) &&
-      percentNum >= 0 &&
-      percentNum <= 100
-    ) {
-      const next = `${percentNum}%`;
+    // Stage-aware deterministic progress: derive from status text keywords + optional %
+    if (!isError && isRunning && trimmed) {
+      const stageInfo = resolveStage(trimmed);
+      trackedProgress = clampProgress(trackedProgress, stageInfo.progress);
+      const next = `${Math.round(trackedProgress)}%`;
       if (next !== lastProgress) {
         headerEl.style.setProperty("--progress", next);
         lastProgress = next;
       }
-    } else {
+    } else if (!isRunning) {
       if (lastProgress !== "0%") {
         headerEl.style.setProperty("--progress", "0%");
         lastProgress = "0%";
@@ -119,7 +124,8 @@ export function createHeaderController({
       headerEl.classList.toggle("isRunning", isRunning);
       lastIsRunning = isRunning;
     }
-    const isIndeterminate = isRunning && percentNum == null;
+    // Only indeterminate when running but we haven't resolved any progress yet
+    const isIndeterminate = isRunning && trackedProgress === 0;
     if (isIndeterminate !== lastIsIndeterminate) {
       headerEl.classList.toggle("isIndeterminate", isIndeterminate);
       lastIsIndeterminate = isIndeterminate;
@@ -210,6 +216,16 @@ export function createHeaderController({
     updateHeader();
   };
 
+  const resetProgress = () => {
+    trackedProgress = 0;
+  };
+
+  const getProgress = () => trackedProgress;
+
+  const setProgress = (value: number) => {
+    trackedProgress = Math.max(0, Math.min(100, value));
+  };
+
   return {
     setBaseTitle,
     setBaseSubtitle,
@@ -218,5 +234,8 @@ export function createHeaderController({
     stopProgress,
     setProgressOverride,
     updateHeaderOffset,
+    resetProgress,
+    getProgress,
+    setProgress,
   };
 }

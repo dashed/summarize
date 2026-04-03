@@ -1,8 +1,10 @@
 import { isTwitterStatusUrl, isYouTubeUrl } from "@steipete/summarize-core/content/url";
 import { countTokens } from "gpt-tokenizer";
 import { render as renderMarkdownAnsi } from "markdansi";
+import { promises as fs } from "node:fs";
 import type { ExtractedLinkContent } from "../../../content/index.js";
-import type { Prompt } from "../../../llm/prompt.js";
+import type { Attachment } from "../../../llm/attachments.js";
+import type { Prompt, PromptPart } from "../../../llm/prompt.js";
 import type { ModelAttempt } from "../../types.js";
 import type { UrlExtractionUi } from "./extract.js";
 import type { SlidesTerminalOutput } from "./slides-output.js";
@@ -22,7 +24,9 @@ import {
   buildLinkSummaryPrompt,
   SUMMARY_LENGTH_TARGET_CHARACTERS,
   SUMMARY_SYSTEM_PROMPT,
+  type VideoDetailLevel,
 } from "../../../prompts/index.js";
+import { buildHistoryUrlMetadata } from "../../../shared/history.js";
 import {
   readLastSuccessfulCliProvider,
   writeLastSuccessfulCliProvider,
@@ -176,6 +180,171 @@ function buildSlidesPromptText({
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
+/**
+ * Read slide PNG files from disk and return them as image Attachments.
+ * Silently skips slides whose image files cannot be read.
+ */
+export async function readSlideImageAttachments(
+  slides: SlidesResult | null | undefined,
+): Promise<Attachment[]> {
+  if (!slides || slides.slides.length === 0) return [];
+  const attachments: Attachment[] = [];
+  for (const slide of slides.slides) {
+    if (!slide.imagePath) continue;
+    try {
+      const bytes = await fs.readFile(slide.imagePath);
+      attachments.push({
+        kind: "image",
+        mediaType: "image/png",
+        bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+        filename: `slide_${slide.index}.png`,
+      });
+    } catch {
+      // Skip slides whose image files are missing or unreadable.
+    }
+  }
+  return attachments;
+}
+
+type VideoChapter = {
+  startTime: number;
+  endTime: number;
+  title: string;
+};
+
+/**
+ * Build interleaved prompt parts that place each slide image next to its
+ * transcript excerpt and chapter context. Returns null when there are no
+ * slide images to interleave (caller should fall back to text-only prompt).
+ */
+export async function buildMultimodalSlidesPrompt({
+  promptText,
+  slides,
+  transcriptTimedText,
+  preset,
+  sourceUrl,
+}: {
+  promptText: string;
+  slides: SlidesResult | null | undefined;
+  transcriptTimedText: string | null | undefined;
+  preset: "short" | "medium" | "long" | "xl" | "xxl";
+  sourceUrl?: string;
+}): Promise<PromptPart[] | null> {
+  console.error(
+    `[summarize:video] buildMultimodalSlidesPrompt: slides=${slides ? `${slides.slides.length} slides` : "null"}, ` +
+      `sourceUrl=${sourceUrl ?? "none"}`,
+  );
+  if (!slides || slides.slides.length === 0) return null;
+
+  const chapters: VideoChapter[] = slides.chapters ?? [];
+  const segments = parseTranscriptTimedText(transcriptTimedText);
+  const slidesWithTimestamps = slides.slides
+    .filter((slide) => Number.isFinite(slide.timestamp) && slide.imagePath)
+    .sort((a, b) => a.timestamp - b.timestamp);
+  if (slidesWithTimestamps.length === 0) {
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: no slides with valid timestamp+imagePath, returning null`,
+    );
+    return null;
+  }
+
+  // Read all slide images from disk.
+  const slideImages = new Map<number, Uint8Array>();
+  let readFailures = 0;
+  for (const slide of slidesWithTimestamps) {
+    try {
+      const buf = await fs.readFile(slide.imagePath);
+      slideImages.set(slide.index, new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
+    } catch (err) {
+      readFailures++;
+      console.error(
+        `[summarize:video] buildMultimodalSlidesPrompt: failed to read slide ${slide.index} at ${slide.imagePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  if (slideImages.size === 0) {
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: all ${readFailures} slide image reads failed, returning null`,
+    );
+    return null;
+  }
+  console.error(
+    `[summarize:video] buildMultimodalSlidesPrompt: read ${slideImages.size}/${slidesWithTimestamps.length} slide images (${readFailures} failed)`,
+  );
+
+  const totalBudget = Number(MAX_SLIDE_TRANSCRIPT_CHARS_BY_PRESET[preset]);
+  const perSlideBudget = Math.max(
+    120,
+    Math.floor(totalBudget / Math.max(1, slidesWithTimestamps.length)),
+  );
+  let remaining = totalBudget;
+
+  // Build the interleaved parts: text prompt, optional video URL, then per-slide text+image pairs.
+  const parts: PromptPart[] = [{ kind: "text", text: promptText }];
+  if (sourceUrl) {
+    console.error(
+      `[summarize:video] buildMultimodalSlidesPrompt: injecting video_url=${sourceUrl}`,
+    );
+    parts.push({ kind: "video_url", url: sourceUrl });
+  }
+
+  let lastChapterTitle: string | null = null;
+  for (let i = 0; i < slidesWithTimestamps.length; i += 1) {
+    const slide = slidesWithTimestamps[i];
+    if (!slide) continue;
+    const imageBytes = slideImages.get(slide.index);
+    if (!imageBytes) continue;
+
+    const prev = slidesWithTimestamps[i - 1];
+    const next = slidesWithTimestamps[i + 1];
+    const startBase = prev ? Math.floor((prev.timestamp + slide.timestamp) / 2) : slide.timestamp;
+    const endBase = next ? Math.ceil((slide.timestamp + next.timestamp) / 2) : slide.timestamp;
+    const start = Math.max(
+      0,
+      (prev ? startBase : slide.timestamp - SLIDE_TRANSCRIPT_DEFAULT_EDGE_SECONDS) -
+        SLIDE_TRANSCRIPT_LEEWAY_SECONDS,
+    );
+    const end =
+      (next ? endBase : slide.timestamp + SLIDE_TRANSCRIPT_DEFAULT_EDGE_SECONDS) +
+      SLIDE_TRANSCRIPT_LEEWAY_SECONDS;
+
+    // Find the chapter this slide belongs to.
+    const chapter =
+      chapters.length > 0
+        ? chapters.reduce<VideoChapter | null>((best, ch) => {
+            if (slide.timestamp >= ch.startTime) return ch;
+            return best;
+          }, null)
+        : null;
+
+    // Build transcript excerpt.
+    const excerptParts: string[] = [];
+    for (const segment of segments) {
+      if (segment.startSeconds < start) continue;
+      if (segment.startSeconds > end) break;
+      excerptParts.push(segment.text);
+    }
+    const excerptRaw = excerptParts.join(" ").trim().replace(/\s+/g, " ");
+    const excerptBudget = remaining > 0 ? Math.min(perSlideBudget, remaining) : 0;
+    const excerpt =
+      excerptRaw && excerptBudget > 0 ? truncateTranscript(excerptRaw, excerptBudget) : "";
+
+    // Build text label for this slide.
+    const chapterLabel =
+      chapter && chapter.title !== lastChapterTitle ? `\n[Chapter: ${chapter.title}]\n` : "";
+    if (chapter) lastChapterTitle = chapter.title;
+    const timeRange = `[${formatTimestamp(start)}–${formatTimestamp(end)}]`;
+    const slideLabel = `${chapterLabel}[slide:${slide.index}] ${timeRange}`;
+    const blockText = excerpt ? `${slideLabel}\n${excerpt}` : slideLabel;
+    remaining = Math.max(0, remaining - blockText.length);
+
+    parts.push({ kind: "text", text: blockText });
+    parts.push({ kind: "image", bytes: imageBytes, mimeType: "image/png" });
+  }
+
+  return parts;
+}
+
 export function buildUrlPrompt({
   extracted,
   outputLanguage,
@@ -184,6 +353,7 @@ export function buildUrlPrompt({
   lengthInstruction,
   languageInstruction,
   slides,
+  videoDetailLevel,
 }: {
   extracted: ExtractedLinkContent;
   outputLanguage: UrlFlowContext["flags"]["outputLanguage"];
@@ -192,8 +362,9 @@ export function buildUrlPrompt({
   lengthInstruction?: string | null;
   languageInstruction?: string | null;
   slides?: SlidesResult | null;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): string {
-  const isYouTube = extracted.siteName === "YouTube";
+  const isYouTube = extracted.siteName === "YouTube" || isYouTubeUrl(extracted.url);
   const preset = lengthArg.kind === "preset" ? lengthArg.preset : "medium";
   const slidesText = buildSlidesPromptText({
     slides,
@@ -211,7 +382,9 @@ export function buildUrlPrompt({
       isYouTube ||
       (extracted.transcriptSource !== null && extracted.transcriptSource !== "unavailable"),
     hasTranscriptTimestamps: Boolean(extracted.transcriptTimedText),
+    isYouTube,
     slides: slidesText ? { count: slides?.slides.length ?? 0, text: slidesText } : null,
+    chapters: slides?.chapters ?? null,
     summaryLength:
       lengthArg.kind === "preset" ? lengthArg.preset : { maxCharacters: lengthArg.maxCharacters },
     outputLanguage,
@@ -219,6 +392,7 @@ export function buildUrlPrompt({
     promptOverride: promptOverride ?? null,
     lengthInstruction: lengthInstruction ?? null,
     languageInstruction: languageInstruction ?? null,
+    videoDetailLevel: videoDetailLevel ?? null,
   });
 }
 
@@ -619,7 +793,43 @@ export async function summarizeExtractedUrl({
     ? await readLastSuccessfulCliProvider(io.envForRun)
     : null;
 
-  const promptPayload: Prompt = { system: SUMMARY_SYSTEM_PROMPT, userText: prompt };
+  const preset = flags.lengthArg.kind === "preset" ? flags.lengthArg.preset : "medium";
+  const envVideo = io.envForRun.SUMMARIZE_SLIDES_VIDEO?.toLowerCase();
+  const videoEnabled = (envVideo === "true" || envVideo === "1") && isYouTubeUrl(url);
+  console.error(
+    `[summarize:video] summarizeExtractedUrl: SUMMARIZE_SLIDES_VIDEO=${envVideo ?? "unset"}, ` +
+      `isYouTubeUrl=${isYouTubeUrl(url)}, videoEnabled=${videoEnabled}, url=${url}`,
+  );
+  const interleavedParts = await buildMultimodalSlidesPrompt({
+    promptText: prompt,
+    slides,
+    transcriptTimedText: extracted.transcriptTimedText,
+    preset,
+    ...(videoEnabled ? { sourceUrl: url } : {}),
+  });
+
+  // If video is enabled but buildMultimodalSlidesPrompt returned null (e.g. slide
+  // images not yet extracted), still inject the video_url so Gemini can process the
+  // video directly.  Everything goes in a single LLM call.
+  const effectiveInterleavedParts: PromptPart[] | null = (() => {
+    if (interleavedParts) return interleavedParts;
+    if (!videoEnabled) return null;
+    console.error(
+      `[summarize:video] summarizeExtractedUrl: slides prompt was null but video enabled; injecting standalone video_url=${url}`,
+    );
+    return [
+      { kind: "text" as const, text: prompt },
+      { kind: "video_url" as const, url },
+    ];
+  })();
+
+  const slideAttachments = effectiveInterleavedParts ? [] : await readSlideImageAttachments(slides);
+  const promptPayload: Prompt = {
+    system: SUMMARY_SYSTEM_PROMPT,
+    userText: prompt,
+    ...(effectiveInterleavedParts ? { interleavedParts: effectiveInterleavedParts } : {}),
+    ...(slideAttachments.length > 0 ? { attachments: slideAttachments } : {}),
+  };
   const promptTokens = countTokens(promptPayload.userText);
   const kindForAuto =
     extracted.siteName === "YouTube" ? ("youtube" as const) : ("website" as const);
@@ -704,10 +914,14 @@ export async function summarizeExtractedUrl({
     ];
   })();
 
-  const cacheStore =
+  const cacheStoreForRead =
     cacheState.mode === "default" && !flags.summaryCacheBypass ? cacheState.store : null;
-  const contentHash = cacheStore ? hashString(normalizeContentForHash(extracted.content)) : null;
-  const promptHash = cacheStore ? buildPromptHash(prompt) : null;
+  // Always allow writes when the store is available (even in bypass/refresh mode)
+  // so that fresh summaries are persisted with metadata for future use.
+  const cacheStoreForWrite = cacheState.store ?? null;
+  const hasCacheStore = cacheStoreForRead || cacheStoreForWrite;
+  const contentHash = hasCacheStore ? hashString(normalizeContentForHash(extracted.content)) : null;
+  const promptHash = hasCacheStore ? buildPromptHash(prompt) : null;
   const lengthKey = buildLengthKey(flags.lengthArg);
   const languageKey = buildLanguageKey(flags.outputLanguage);
   const autoSelectionCacheModel = model.isFallbackModel
@@ -758,7 +972,7 @@ export async function summarizeExtractedUrl({
     return;
   }
 
-  if (cacheStore && contentHash && promptHash) {
+  if (cacheStoreForRead && contentHash && promptHash) {
     cacheChecked = true;
     if (autoSelectionCacheModel) {
       const key = buildSummaryCacheKey({
@@ -767,8 +981,12 @@ export async function summarizeExtractedUrl({
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url,
       });
-      const cached = cacheStore.getJson<{ summary?: unknown; model?: unknown }>("summary", key);
+      const cached = cacheStoreForRead.getJson<{ summary?: unknown; model?: unknown }>(
+        "summary",
+        key,
+      );
       const cachedSummary =
         cached && typeof cached.summary === "string" ? cached.summary.trim() : null;
       const cachedModelId = cached && typeof cached.model === "string" ? cached.model.trim() : null;
@@ -813,8 +1031,9 @@ export async function summarizeExtractedUrl({
           model: attempt.userModelId,
           lengthKey,
           languageKey,
+          url,
         });
-        const cached = cacheStore.getText("summary", key);
+        const cached = cacheStoreForRead.getText("summary", key);
         if (!cached) continue;
         writeVerbose(
           io.stderr,
@@ -938,15 +1157,40 @@ export async function summarizeExtractedUrl({
     return;
   }
 
-  if (!summaryFromCache && cacheStore && contentHash && promptHash) {
+  if (!summaryFromCache && cacheStoreForWrite && contentHash && promptHash) {
     const perModelKey = buildSummaryCacheKey({
       contentHash,
       promptHash,
       model: usedAttempt.userModelId,
       lengthKey,
       languageKey,
+      url,
     });
-    cacheStore.setText("summary", perModelKey, summaryResult.summary, cacheState.ttlMs);
+    const cacheMeta = {
+      model: usedAttempt.userModelId,
+      length: lengthKey,
+      language: languageKey,
+      url,
+      historyUrl: buildHistoryUrlMetadata(url),
+      title: extracted.title ?? null,
+      siteName: extracted.siteName ?? null,
+      summaryChars: summaryResult.summary.length,
+      preview: summaryResult.summary.replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\n+/g, " ").replace(/\s+/g, " ").trim().slice(0, 120),
+      prompt,
+      systemPrompt: SUMMARY_SYSTEM_PROMPT,
+      contentChars: extracted.content.length,
+      videoDurationSeconds: extracted.mediaDurationSeconds ?? null,
+      hasVideo: !!extracted.video,
+      maxTokens: model.desiredOutputTokens,
+      preset,
+    };
+    cacheStoreForWrite.setText(
+      "summary",
+      perModelKey,
+      summaryResult.summary,
+      cacheState.ttlMs,
+      cacheMeta,
+    );
     writeVerbose(io.stderr, flags.verbose, "cache write summary", flags.verboseColor, io.envForRun);
     if (autoSelectionCacheModel) {
       const selectionKey = buildSummaryCacheKey({
@@ -955,12 +1199,14 @@ export async function summarizeExtractedUrl({
         model: autoSelectionCacheModel,
         lengthKey,
         languageKey,
+        url,
       });
-      cacheStore.setJson(
+      cacheStoreForWrite.setJson(
         "summary",
         selectionKey,
         { summary: summaryResult.summary, model: usedAttempt.userModelId },
         cacheState.ttlMs,
+        cacheMeta,
       );
       writeVerbose(
         io.stderr,

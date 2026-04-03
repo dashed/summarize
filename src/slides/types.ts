@@ -19,6 +19,12 @@ export type SlideImage = {
   ocrConfidence?: number | null;
 };
 
+export type VideoChapter = {
+  startTime: number; // seconds
+  endTime: number; // seconds
+  title: string;
+};
+
 export type SlideAutoTune = {
   enabled: boolean;
   chosenThreshold: number;
@@ -40,5 +46,6 @@ export type SlideExtractionResult = {
   ocrRequested: boolean;
   ocrAvailable: boolean;
   slides: SlideImage[];
+  chapters?: VideoChapter[] | null;
   warnings: string[];
 };

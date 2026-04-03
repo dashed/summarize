@@ -40,6 +40,8 @@ type SummarizeControlProps = {
   slidesTextMode?: "transcript" | "ocr";
   slidesTextToggleVisible?: boolean;
   onSlidesTextModeChange?: (value: "transcript" | "ocr") => void;
+  videoDetailLevel?: "summary" | "detailed";
+  onVideoDetailLevelChange?: (value: "summary" | "detailed") => void;
   onChange: (value: { mode: "page" | "video"; slides: boolean }) => void;
   onSummarize: () => void;
 };
@@ -530,6 +532,12 @@ function SummarizeControl(props: SummarizeControlProps) {
   const selectedValue = api.value[0] ?? "";
   const selectedLabel =
     api.valueAsString || sourceItems.find((item) => item.value === selectedValue)?.label || "Page";
+  const shortModeLabel =
+    selectedValue === "video-slides"
+      ? `${props.videoLabel ?? "Video"} + Slides`
+      : selectedValue === "video"
+        ? (props.videoLabel ?? "Video")
+        : "Page";
 
   const positionerProps = api.getPositionerProps();
   const positionerStyle = {
@@ -603,6 +611,10 @@ function SummarizeControl(props: SummarizeControlProps) {
     props.onSlidesTextModeChange,
   );
 
+  const showVideoDetailToggle = Boolean(
+    props.mode === "video" && props.mediaAvailable && props.onVideoDetailLevelChange,
+  );
+
   return (
     <div className="summarizeControlGroup">
       <div className="picker summarizePicker" {...api.getRootProps()}>
@@ -618,10 +630,29 @@ function SummarizeControl(props: SummarizeControlProps) {
           onKeyDown={onKeyDown}
         >
           Summarize
+          <span className="summarizeSource"> · {shortModeLabel}</span>
         </button>
         {portalRoot ? createPortal(content, portalRoot) : content}
         <select className="pickerHidden" {...api.getHiddenSelectProps()} />
       </div>
+      {showVideoDetailToggle ? (
+        <fieldset className="videoDetailToggle">
+          <button
+            type="button"
+            data-active={props.videoDetailLevel === "summary" ? "true" : "false"}
+            onClick={() => props.onVideoDetailLevelChange?.("summary")}
+          >
+            Summary
+          </button>
+          <button
+            type="button"
+            data-active={props.videoDetailLevel === "detailed" ? "true" : "false"}
+            onClick={() => props.onVideoDetailLevelChange?.("detailed")}
+          >
+            Detailed
+          </button>
+        </fieldset>
+      ) : null}
       {showSlidesTextToggle ? (
         <fieldset className="summarizeSlidesToggle">
           <legend className="summarizeSlidesToggle__label">Slides text source</legend>

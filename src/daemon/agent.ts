@@ -7,6 +7,13 @@ import { resolveRunContextState } from "../run/run-context.js";
 import { resolveModelSelection } from "../run/run-models.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
 
+const YOUTUBE_RE =
+  /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/watch|youtu\.be\/|youtube\.com\/live\/)/i;
+
+export function isYouTubeUrl(url: string): boolean {
+  return YOUTUBE_RE.test(url);
+}
+
 const AGENT_PROMPT_AUTOMATION = `You are Summarize Automation, not Claude.
 
 # Purpose
@@ -24,6 +31,9 @@ Professional, concise, pragmatic. Use "I" for your actions. Match the user's ton
 - summarize: run Summarize on a URL (summary or extract text/markdown)
 - debugger: main-world eval (last resort; shows debugger banner)
 
+# Math
+When discussing mathematical content, use LaTeX notation: $...$ for inline math and $$...$$ for display/block math. The output supports KaTeX rendering.
+
 # Critical Rules
 - Navigation: ONLY use navigate() (or navigate tool). Never use window.location/history in code.
 - Tool outputs are hidden from the user. If you use tool data, repeat the relevant parts in your response.
@@ -39,13 +49,30 @@ Answer questions about the current page content. You cannot use tools or automat
 # Tone
 Professional, concise, pragmatic. Use "I" for your actions. Match the user's tone. No emojis.
 
+# Math
+When discussing mathematical content, use LaTeX notation: $...$ for inline math and $$...$$ for display/block math. The output supports KaTeX rendering.
+
 # Constraints
 - Do not claim you clicked, browsed, or executed tools.
 - If the user wants automation, ask them to enable Automation in Settings.
 `;
 
+const TIMESTAMP_INSTRUCTION = `
+# Timestamps
+When the page content includes a transcript with [mm:ss] or [hh:mm:ss] timestamps, weave them into your answers wherever you reference a specific moment. Format: [mm:ss] (or [hh:mm:ss]). The user can click these to jump to that point in the video. Do not invent timestamps — only use ones present in the transcript.`;
+
 export function buildAgentPromptHash(automationEnabled: boolean): string {
   return buildPromptHash(automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY);
+}
+
+/**
+ * Returns just the base agent system prompt template (without page content).
+ * Used for storing in chat metadata so the UI can display what prompt was used.
+ */
+export function getAgentBaseSystemPrompt(automationEnabled: boolean, hasTimestamps: boolean): string {
+  const base = automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY;
+  const timestampBlock = hasTimestamps ? TIMESTAMP_INSTRUCTION : "";
+  return `${base}${timestampBlock}`.trim();
 }
 
 const TOOL_DEFINITIONS: Record<string, Tool> = {
@@ -308,7 +335,9 @@ function buildSystemPrompt({
   automationEnabled: boolean;
 }): string {
   const base = automationEnabled ? AGENT_PROMPT_AUTOMATION : AGENT_PROMPT_CHAT_ONLY;
-  return `${base}
+  const hasTimestamps = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pageContent);
+  const timestampBlock = hasTimestamps ? TIMESTAMP_INSTRUCTION : "";
+  return `${base}${timestampBlock}
 
 Page URL: ${pageUrl}
 ${pageTitle ? `Page Title: ${pageTitle}` : ""}
@@ -448,10 +477,12 @@ async function resolveAgentModel({
   env,
   pageContent,
   modelOverride,
+  pageUrl,
 }: {
   env: Record<string, string | undefined>;
   pageContent: string;
   modelOverride: string | null;
+  pageUrl?: string;
 }) {
   const {
     config,
@@ -544,7 +575,7 @@ async function resolveAgentModel({
     kind: "website",
     promptTokens: estimatedPromptTokens,
     desiredOutputTokens: maxOutputTokens,
-    requiresVideoUnderstanding: false,
+    requiresVideoUnderstanding: pageUrl ? isYouTubeUrl(pageUrl) : false,
     env: envForAuto,
     config: configForModelSelection,
     catalog: null,
@@ -566,6 +597,157 @@ async function resolveAgentModel({
   }
 
   throw new Error("No model available for agent");
+}
+
+/**
+ * Stream an agent chat using a raw OpenAI-compatible fetch with `video_url`
+ * content parts.  pi-ai has no video content type, so we build the payload
+ * ourselves.  Only used for non-automation chat (no tools) when the provider
+ * supports video (OpenRouter → Gemini).
+ */
+async function streamAgentWithVideo({
+  baseUrl,
+  modelId,
+  apiKey,
+  systemPrompt,
+  messages,
+  videoUrl,
+  maxOutputTokens,
+  reasoning,
+  signal,
+  onChunk,
+}: {
+  baseUrl: string;
+  modelId: string;
+  apiKey: string;
+  systemPrompt: string;
+  messages: Message[];
+  videoUrl: string;
+  maxOutputTokens: number;
+  reasoning?: "minimal" | "low" | "medium" | "high";
+  signal?: AbortSignal;
+  onChunk: (text: string) => void;
+}): Promise<string> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+
+  // Convert pi-ai messages to OpenAI format, injecting video_url in the first
+  // user message.
+  const oaiMessages: Array<Record<string, unknown>> = [{ role: "system", content: systemPrompt }];
+  let videoInjected = false;
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : (msg.content as Array<{ type: string; text?: string }>)
+              .filter((p) => p.type === "text")
+              .map((p) => p.text ?? "")
+              .join("");
+      const contentParts: Array<Record<string, unknown>> = [{ type: "text", text }];
+      if (!videoInjected) {
+        contentParts.push({
+          type: "video_url",
+          video_url: { url: videoUrl },
+        });
+        videoInjected = true;
+      }
+      oaiMessages.push({ role: "user", content: contentParts });
+    } else if (msg.role === "assistant") {
+      const text = (msg.content as Array<{ type: string; text?: string }>)
+        .filter((p) => p.type === "text")
+        .map((p) => p.text ?? "")
+        .join("");
+      oaiMessages.push({ role: "assistant", content: text });
+    }
+    // toolResult messages are skipped — this path has no tools.
+  }
+
+  const isOpenRouter = /openrouter\.ai/i.test(baseUrl);
+  const payload = {
+    model: modelId,
+    messages: oaiMessages,
+    max_tokens: maxOutputTokens,
+    stream: true,
+    ...(reasoning ? { reasoning: { effort: reasoning } } : {}),
+    // Force Google AI Studio — Vertex does not support YouTube video_url parts.
+    ...(isOpenRouter ? { provider: { order: ["google-ai-studio"], allow_fallbacks: true } } : {}),
+  };
+
+  console.error(
+    `[video-debug] streamAgentWithVideo REQUEST: model=${modelId}, videoUrl=${videoUrl}, ` +
+      `reasoning=${reasoning ?? "none"}, isOpenRouter=${isOpenRouter}, ` +
+      `videoInjected=${videoInjected}, maxOutputTokens=${maxOutputTokens}`,
+  );
+  if (payload.provider) {
+    console.error(
+      `[video-debug] streamAgentWithVideo PROVIDER_ROUTING: ${JSON.stringify(payload.provider)}`,
+    );
+  }
+
+  const fetchStartMs = Date.now();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  const connectElapsedMs = Date.now() - fetchStartMs;
+  console.error(
+    `[video-debug] streamAgentWithVideo CONNECTED: elapsed=${connectElapsedMs}ms, status=${response.status}`,
+  );
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    throw new Error(`Agent video stream failed (${response.status}): ${bodyText.slice(0, 500)}`);
+  }
+  if (!response.body) throw new Error("Missing stream body");
+
+  // Parse SSE from OpenAI streaming response.
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith(":")) continue;
+      if (!trimmed.startsWith("data: ")) continue;
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") continue;
+
+      try {
+        const parsed = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+        };
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) {
+          fullText += delta;
+          onChunk(delta);
+        }
+      } catch {
+        // skip malformed JSON chunks
+      }
+    }
+  }
+
+  const totalElapsedMs = Date.now() - fetchStartMs;
+  console.error(
+    `[video-debug] streamAgentWithVideo DONE: elapsed=${totalElapsedMs}ms, chars=${fullText.length}`,
+  );
+
+  return fullText;
 }
 
 export async function streamAgentResponse({
@@ -611,8 +793,60 @@ export async function streamAgentResponse({
     env,
     pageContent,
     modelOverride,
+    pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+  const reasoning = model.reasoning ? ("high" as const) : undefined;
+
+  // For YouTube videos on OpenRouter (Gemini) without automation tools,
+  // use a raw streaming fetch that includes the video_url multimodal part.
+  const useVideoPath = isYouTubeUrl(pageUrl) && !automationEnabled && provider === "openrouter";
+
+  console.error(
+    `[video-debug] streamAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
+      `automationEnabled=${automationEnabled}, provider=${provider}, ` +
+      `model=${model.id}, model.reasoning=${model.reasoning}, ` +
+      `reasoning=${reasoning ?? "none"}, useVideoPath=${useVideoPath}`,
+  );
+
+  if (useVideoPath) {
+    console.error(
+      `[summarize:agent-video] using video multimodal path for ${pageUrl} with ${model.id}`,
+    );
+    const fullText = await streamAgentWithVideo({
+      baseUrl: model.baseUrl,
+      modelId: model.id,
+      apiKey,
+      systemPrompt,
+      messages: normalizedMessages,
+      videoUrl: pageUrl,
+      maxOutputTokens,
+      reasoning,
+      signal,
+      onChunk,
+    });
+
+    // Build a minimal AssistantMessage for the onAssistant callback.
+    const syntheticAssistant: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: fullText }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    onAssistant(syntheticAssistant);
+    return;
+  }
 
   const stream = streamSimple(
     model,
@@ -623,6 +857,7 @@ export async function streamAgentResponse({
     },
     {
       maxTokens: maxOutputTokens,
+      ...(reasoning ? { reasoning } : {}),
       apiKey,
       signal,
     },
@@ -689,8 +924,56 @@ export async function completeAgentResponse({
     env,
     pageContent,
     modelOverride,
+    pageUrl,
   });
   const apiKey = resolveApiKeyForModel({ provider, apiKeys });
+  const reasoning = model.reasoning ? ("high" as const) : undefined;
+
+  // For YouTube videos on OpenRouter (Gemini) without automation tools,
+  // use a raw fetch that includes the video_url multimodal part.
+  const useVideoPath = isYouTubeUrl(pageUrl) && !automationEnabled && provider === "openrouter";
+
+  console.error(
+    `[video-debug] completeAgentResponse DECISION: isYouTube=${isYouTubeUrl(pageUrl)}, ` +
+      `automationEnabled=${automationEnabled}, provider=${provider}, ` +
+      `model=${model.id}, model.reasoning=${model.reasoning}, ` +
+      `reasoning=${reasoning ?? "none"}, useVideoPath=${useVideoPath}`,
+  );
+
+  if (useVideoPath) {
+    let fullText = "";
+    await streamAgentWithVideo({
+      baseUrl: model.baseUrl,
+      modelId: model.id,
+      apiKey,
+      systemPrompt,
+      messages: normalizedMessages,
+      videoUrl: pageUrl,
+      maxOutputTokens,
+      reasoning,
+      onChunk: (text) => {
+        fullText += text;
+      },
+    });
+
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: fullText }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as AssistantMessage;
+  }
 
   const assistant = await completeSimple(
     model,
@@ -701,6 +984,7 @@ export async function completeAgentResponse({
     },
     {
       maxTokens: maxOutputTokens,
+      ...(reasoning ? { reasoning } : {}),
       apiKey,
     },
   );

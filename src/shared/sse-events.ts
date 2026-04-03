@@ -35,6 +35,7 @@ export type SseEvent =
   | { event: "status"; data: { text: string } }
   | { event: "chunk"; data: { text: string } }
   | { event: "assistant"; data: AssistantMessage }
+  | { event: "systemPrompt"; data: { systemPrompt: string } }
   | { event: "metrics"; data: SseMetricsData }
   | { event: "done"; data: Record<string, never> }
   | { event: "error"; data: { message: string } };
@@ -57,6 +58,8 @@ export function parseSseEvent(message: RawSseMessage): SseEvent | null {
       return { event: "chunk", data: JSON.parse(message.data) as { text: string } };
     case "assistant":
       return { event: "assistant", data: JSON.parse(message.data) as AssistantMessage };
+    case "systemPrompt":
+      return { event: "systemPrompt", data: JSON.parse(message.data) as { systemPrompt: string } };
     case "metrics":
       return { event: "metrics", data: JSON.parse(message.data) as SseMetricsData };
     case "done":

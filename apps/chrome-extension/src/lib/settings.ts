@@ -39,6 +39,7 @@ export type Settings = {
   fontFamily: string;
   fontSize: number;
   lineHeight: number;
+  videoDetailLevel: "summary" | "detailed";
   colorScheme: ColorScheme;
   colorMode: ColorMode;
 };
@@ -211,6 +212,13 @@ function normalizeMaxOutputTokens(value: unknown): string {
   return value.trim();
 }
 
+function normalizeVideoDetailLevel(value: unknown): "summary" | "detailed" {
+  if (typeof value !== "string") return defaultSettings.videoDetailLevel;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === "summary" || trimmed === "detailed") return trimmed;
+  return defaultSettings.videoDetailLevel;
+}
+
 function normalizeLineHeight(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return defaultSettings.lineHeight;
   if (value < 1.1 || value > 2.2) return defaultSettings.lineHeight;
@@ -247,6 +255,7 @@ export const defaultSettings: Settings = {
   timeout: "",
   retries: null,
   maxOutputTokens: "",
+  videoDetailLevel: "detailed",
   fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
   fontSize: 14,
   lineHeight: 1.45,
@@ -328,6 +337,7 @@ export async function loadSettings(): Promise<Settings> {
     timeout: normalizeTimeout(raw.timeout),
     retries: normalizeRetries(raw.retries),
     maxOutputTokens: normalizeMaxOutputTokens(raw.maxOutputTokens),
+    videoDetailLevel: normalizeVideoDetailLevel(raw.videoDetailLevel),
     fontFamily: normalizeFontFamily(raw.fontFamily),
     fontSize: typeof raw.fontSize === "number" ? raw.fontSize : defaultSettings.fontSize,
     lineHeight: normalizeLineHeight(raw.lineHeight),
@@ -356,6 +366,7 @@ export async function saveSettings(settings: Settings): Promise<void> {
       retries: normalizeRetries(settings.retries),
       maxOutputTokens: normalizeMaxOutputTokens(settings.maxOutputTokens),
       transcriber: normalizeTranscriber(settings.transcriber),
+      videoDetailLevel: normalizeVideoDetailLevel(settings.videoDetailLevel),
       fontFamily: normalizeFontFamily(settings.fontFamily),
       lineHeight: normalizeLineHeight(settings.lineHeight),
       colorScheme: normalizeColorScheme(settings.colorScheme),

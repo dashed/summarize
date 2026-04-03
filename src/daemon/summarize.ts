@@ -1,5 +1,6 @@
 import type { CacheState } from "../cache.js";
 import type { RunMetricsReport } from "../costs.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import type { RunOverrides } from "../run/run-settings.js";
 import type {
   SlideExtractionResult,
@@ -151,6 +152,7 @@ export async function streamSummaryForVisiblePage({
   cache,
   mediaCache,
   overrides,
+  videoDetailLevel,
 }: {
   env: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
@@ -164,6 +166,7 @@ export async function streamSummaryForVisiblePage({
   cache: CacheState;
   mediaCache: MediaCache | null;
   overrides: RunOverrides;
+  videoDetailLevel?: VideoDetailLevel | null;
 }): Promise<{ usedModel: string; metrics: VisiblePageMetrics }> {
   const startedAt = Date.now();
   let usedModel: string | null = null;
@@ -183,6 +186,7 @@ export async function streamSummaryForVisiblePage({
     maxExtractCharacters: null,
     format,
     overrides,
+    videoDetailLevel,
     hooks: {
       onModelChosen: (modelId) => {
         usedModel = modelId;
@@ -258,6 +262,7 @@ export async function streamSummaryForVisiblePage({
     promptOverride: ctx.flags.promptOverride ?? null,
     lengthInstruction: ctx.flags.lengthInstruction ?? null,
     languageInstruction: ctx.flags.languageInstruction ?? null,
+    videoDetailLevel: ctx.flags.videoDetailLevel ?? null,
   });
 
   await summarizeExtractedUrl({
@@ -306,7 +311,9 @@ export async function streamSummaryForUrl({
   mediaCache,
   overrides,
   slides,
+  ytDlpCookiesFile,
   hooks,
+  videoDetailLevel,
 }: {
   env: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
@@ -321,6 +328,8 @@ export async function streamSummaryForUrl({
   mediaCache: MediaCache | null;
   overrides: RunOverrides;
   slides?: SlideSettings | null;
+  ytDlpCookiesFile?: string | null;
+  videoDetailLevel?: VideoDetailLevel | null;
   hooks?: {
     onExtracted?: ((extracted: ExtractedLinkContent) => void) | null;
     onSlidesExtracted?: ((slides: SlideExtractionResult) => void) | null;
@@ -359,6 +368,8 @@ export async function streamSummaryForUrl({
     format,
     overrides,
     slides,
+    ytDlpCookiesFile,
+    videoDetailLevel,
     hooks: {
       onModelChosen: (modelId) => {
         usedModel = modelId;
@@ -397,11 +408,43 @@ export async function streamSummaryForUrl({
   });
 
   writeStatus?.("Extracting…");
-  await runUrlFlow({ ctx, url: input.url, isYoutubeUrl: isYouTubeUrl(input.url) });
+
+  // For YouTube video URLs, send periodic status events so the extension's
+  // idle-timeout (120 s) does not fire while the non-streaming video+reasoning
+  // LLM request is in flight.  Real status events (not SSE comments) are needed
+  // because the extension only resets its timer on parsed events.
+  const isYoutube = isYouTubeUrl(input.url);
+  if (isYoutube) {
+    console.error(`[video-debug] streamSummaryForUrl START: url=${input.url}, isYouTube=true`);
+  }
+  let videoKeepalive: ReturnType<typeof setInterval> | null = null;
+  if (isYoutube && writeStatus) {
+    let tick = 0;
+    videoKeepalive = setInterval(() => {
+      tick++;
+      writeStatus?.(`Processing video… (${tick * 30}s)`);
+    }, 30_000);
+  }
+  const flowStartMs = Date.now();
+  try {
+    await runUrlFlow({ ctx, url: input.url, isYoutubeUrl: isYoutube });
+  } finally {
+    if (videoKeepalive) clearInterval(videoKeepalive);
+  }
+  const flowElapsedMs = Date.now() - flowStartMs;
 
   const extracted = extractedRef.value;
   if (!extracted) {
     throw new Error("Internal error: missing extracted content");
+  }
+
+  if (isYoutube) {
+    console.error(
+      `[video-debug] streamSummaryForUrl FLOW_DONE: elapsed=${flowElapsedMs}ms, ` +
+        `duration=${extracted.mediaDurationSeconds ?? "?"}s, ` +
+        `transcriptChars=${extracted.transcriptCharacters ?? "?"}, ` +
+        `hasVideo=${!!extracted.video}, isVideoOnly=${extracted.isVideoOnly}`,
+    );
   }
 
   const report = await ctx.hooks.buildReport();
@@ -437,6 +480,7 @@ export async function extractContentForUrl({
   overrides,
   format,
   slides,
+  ytDlpCookiesFile,
   hooks,
 }: {
   env: Record<string, string | undefined>;
@@ -447,6 +491,7 @@ export async function extractContentForUrl({
   overrides: RunOverrides;
   format?: "text" | "markdown";
   slides?: SlideSettings | null;
+  ytDlpCookiesFile?: string | null;
   hooks?: {
     onSlidesExtracted?: ((slides: SlideExtractionResult) => void) | null;
   } | null;
@@ -469,6 +514,7 @@ export async function extractContentForUrl({
     overrides,
     extractOnly: true,
     slides,
+    ytDlpCookiesFile,
     hooks: {
       onExtracted: (content) => {
         extractedRef.value = content;

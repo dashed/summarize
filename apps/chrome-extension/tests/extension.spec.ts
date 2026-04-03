@@ -15,11 +15,13 @@ import {
   parseSlideSummariesFromMarkdown,
   splitSlideTitleFromText,
 } from "../../../src/run/flows/url/slides-text.js";
+import { getLocalChromiumSupportIssue } from "./browser-support";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const consoleErrorAllowlist: RegExp[] = [];
 const allowFirefoxExtensionTests = process.env.ALLOW_FIREFOX_EXTENSION_TESTS === "1";
+const localChromiumSupportIssue = getLocalChromiumSupportIssue();
 const allowYouTubeE2E = process.env.ALLOW_YOUTUBE_E2E === "1";
 const youtubeEnvUrls =
   typeof process.env.SUMMARIZE_YOUTUBE_URLS === "string"
@@ -52,6 +54,10 @@ type BrowserType = "chromium" | "firefox";
 test.skip(
   ({ browserName }) => browserName === "firefox" && !allowFirefoxExtensionTests,
   "Firefox extension tests are blocked by Playwright limitations. Set ALLOW_FIREFOX_EXTENSION_TESTS=1 to run.",
+);
+test.skip(
+  ({ browserName }) => browserName === "chromium" && localChromiumSupportIssue !== null,
+  localChromiumSupportIssue ?? "Chromium E2E host support check passed.",
 );
 
 type ExtensionHarness = {
@@ -313,7 +319,7 @@ async function sendBgMessage(harness: ExtensionHarness, message: object) {
         return;
       }
     }
-    chrome.runtime.sendMessage(payload);
+    void chrome.runtime.sendMessage(payload);
   }, message);
 }
 
@@ -1390,6 +1396,81 @@ test("sidepanel clears summary when tab url changes", async ({
 
     await expect(page.locator("#title")).toHaveText("New Title");
     await expect(page.locator(".render__markdownHost")).toHaveText("");
+    assertNoErrors(harness);
+  } finally {
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
+test("sidepanel restores daemon summary history using the exact canonical URL", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const harness = await launchExtension(getBrowserFromProject(testInfo.project.name));
+
+  try {
+    await seedSettings(harness, { token: "test-token", autoSummarize: false });
+
+    const requestedUrls: string[] = [];
+    await harness.context.route("http://127.0.0.1:8787/v1/history/summaries?**", async (route) => {
+      const requestedUrl = new URL(route.request().url()).searchParams.get("url") ?? "";
+      requestedUrls.push(requestedUrl);
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ok: true,
+          summaries:
+            requestedUrl === "https://example.com/article?id=1"
+              ? [
+                  {
+                    key: "exact-entry",
+                    metadata: {
+                      url: "https://example.com/article?id=1&utm_source=newsletter",
+                      historyUrl: "https://example.com/article?id=1",
+                      title: "Exact Match",
+                      model: "openai/gpt-4o",
+                    },
+                  },
+                ]
+              : [],
+        }),
+      });
+    });
+    await harness.context.route(
+      "http://127.0.0.1:8787/v1/history/summaries/exact-entry",
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ok: true,
+            value: "# Exact Summary\n\nRestored for id=1 only.",
+            metadata: {
+              url: "https://example.com/article?id=1&utm_source=newsletter",
+              historyUrl: "https://example.com/article?id=1",
+              title: "Exact Match",
+              model: "openai/gpt-4o",
+            },
+          }),
+        });
+      },
+    );
+
+    const page = await openExtensionPage(harness, "sidepanel.html", "#title");
+    await waitForPanelPort(page);
+
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: buildUiState({
+        tab: { id: 1, url: "https://example.com/article?id=1", title: "Article One" },
+        settings: { autoSummarize: false, tokenPresent: true },
+        status: "",
+      }),
+    });
+
+    await expect(page.locator(".render__markdownHost")).toContainText("Exact Summary");
+    await expect(page.locator("#title")).toHaveText("Exact Match");
+    await expect.poll(() => requestedUrls).toEqual(["https://example.com/article?id=1"]);
     assertNoErrors(harness);
   } finally {
     await closeExtension(harness.context, harness.userDataDir);
@@ -3529,6 +3610,55 @@ test("sidepanel clears chat on user navigation", async ({
   }
 });
 
+test("sidepanel restores local chat history for the exact current URL", async ({
+  browserName: _browserName,
+}, testInfo) => {
+  const harness = await launchExtension(getBrowserFromProject(testInfo.project.name));
+
+  try {
+    await seedSettings(harness, { token: "test-token", autoSummarize: false, chatEnabled: true });
+    const page = await openExtensionPage(harness, "sidepanel.html", "#title");
+    await waitForPanelPort(page);
+
+    await page.evaluate(() => {
+      const buildKey = (tabId: number, url: string) =>
+        `chat:tab:${tabId}:${encodeURIComponent(url)}`;
+      return chrome.storage.session.set({
+        [buildKey(1, "https://example.com/article?id=1")]: [
+          { role: "user", content: "First article", timestamp: Date.now(), id: "msg-first" },
+        ],
+        [buildKey(1, "https://example.com/article?id=10")]: [
+          { role: "user", content: "Tenth article", timestamp: Date.now(), id: "msg-tenth" },
+        ],
+      });
+    });
+
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: buildUiState({
+        tab: { id: 1, url: "https://example.com/article?id=1", title: "Article 1" },
+        settings: { chatEnabled: true, tokenPresent: true },
+      }),
+    });
+
+    await expect(page.locator("#chatMessages")).toContainText("First article");
+
+    await sendBgMessage(harness, {
+      type: "ui:state",
+      state: buildUiState({
+        tab: { id: 1, url: "https://example.com/article?id=10", title: "Article 10" },
+        settings: { chatEnabled: true, tokenPresent: true },
+      }),
+    });
+
+    await expect(page.locator("#chatMessages")).toContainText("Tenth article");
+    await expect(page.locator("#chatMessages")).not.toContainText("First article");
+    assertNoErrors(harness);
+  } finally {
+    await closeExtension(harness.context, harness.userDataDir);
+  }
+});
+
 test("auto summarize reruns after panel reopen", async ({
   browserName: _browserName,
 }, testInfo) => {
@@ -3756,7 +3886,7 @@ test("content script extracts visible duration metadata", async ({
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tab?.id) return { ok: false, error: "missing tab" };
       return new Promise((resolve) => {
-        chrome.tabs.sendMessage(tab.id, { type: "extract", maxChars: 10_000 }, (response) => {
+        void chrome.tabs.sendMessage(tab.id, { type: "extract", maxChars: 10_000 }, (response) => {
           resolve(response ?? { ok: false, error: "no response" });
         });
       });

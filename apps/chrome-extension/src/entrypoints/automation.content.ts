@@ -337,70 +337,10 @@ function hideReplOverlay() {
   window.__summarizeReplOverlay = false;
 }
 
-function handleNativeInputBridge() {
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    const data = event.data as { source?: string; requestId?: string; payload?: unknown };
-    if (data?.source !== "summarize-native-input" || !data.requestId) return;
-    const payload = data.payload as { action?: string };
-    chrome.runtime.sendMessage(
-      { type: "automation:native-input", payload },
-      (response: { ok: boolean; error?: string } | undefined) => {
-        window.postMessage(
-          {
-            source: "summarize-native-input",
-            requestId: data.requestId,
-            ok: response?.ok ?? false,
-            error: response?.error,
-          },
-          "*",
-        );
-      },
-    );
-  });
-}
-
-// Bridge artifact RPC calls from userScripts (page world) to the extension.
-function handleArtifactsBridge() {
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    const data = event.data as {
-      source?: string;
-      requestId?: string;
-      action?: string;
-      payload?: unknown;
-    };
-    if (data?.source !== "summarize-artifacts" || !data.requestId) return;
-    chrome.runtime.sendMessage(
-      {
-        type: "automation:artifacts",
-        requestId: data.requestId,
-        action: data.action,
-        payload: data.payload,
-      },
-      (response: { ok: boolean; result?: unknown; error?: string } | undefined) => {
-        window.postMessage(
-          {
-            source: "summarize-artifacts",
-            requestId: data.requestId,
-            ok: response?.ok ?? false,
-            result: response?.result,
-            error: response?.error,
-          },
-          "*",
-        );
-      },
-    );
-  });
-}
-
 export default defineContentScript({
   matches: ["<all_urls>"],
   runAt: "document_idle",
   main() {
-    handleNativeInputBridge();
-    handleArtifactsBridge();
-
     chrome.runtime.onMessage.addListener(
       (
         raw: { type?: string; message?: string | null; action?: string },

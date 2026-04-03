@@ -8,6 +8,7 @@ import type {
 } from "../content/index.js";
 import type { ExecFileFn } from "../markitdown.js";
 import type { FixedModelSpec } from "../model-spec.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import type { AssetSummaryContext, SummarizeAssetArgs } from "../run/flows/asset/summary.js";
 import type { UrlFlowContext } from "../run/flows/url/types.js";
 import type { SlideImage, SlideSettings, SlideSourceKind } from "../slides/index.js";
@@ -78,6 +79,7 @@ export type DaemonUrlFlowContextArgs = {
   format?: "text" | "markdown";
   overrides?: RunOverrides | null;
   extractOnly?: boolean;
+  ytDlpCookiesFile?: string | null;
   slides?: SlideSettings | null;
   hooks?: {
     onModelChosen?: ((modelId: string) => void) | null;
@@ -104,6 +106,7 @@ export type DaemonUrlFlowContextArgs = {
   } | null;
   runStartedAtMs: number;
   stdoutSink: TextSink;
+  videoDetailLevel?: VideoDetailLevel | null;
 };
 
 export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlFlowContext {
@@ -120,10 +123,12 @@ export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlF
     format,
     overrides,
     extractOnly,
+    ytDlpCookiesFile = null,
     slides,
     hooks,
     runStartedAtMs,
     stdoutSink,
+    videoDetailLevel = null,
   } = args;
 
   const envForRun: Record<string, string | undefined> = { ...env };
@@ -400,6 +405,7 @@ export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlF
       slides: slides ?? null,
       slidesDebug: false,
       slidesOutput: false,
+      videoDetailLevel,
     },
     model: {
       requestedModel,
@@ -436,6 +442,7 @@ export function createDaemonUrlFlowContext(args: DaemonUrlFlowContextArgs): UrlF
         apifyToken,
         ytDlpPath,
         ytDlpCookiesFromBrowser,
+        ytDlpCookiesFile,
         falApiKey,
         groqApiKey,
         openaiTranscriptionKey,

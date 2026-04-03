@@ -569,7 +569,7 @@ form {
   margin: 0;
   padding: 8px 0 0;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .logsTable {
@@ -627,7 +627,7 @@ form {
 
 .logsTable td.details {
   color: var(--muted);
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .processHeader {
@@ -778,7 +778,7 @@ form {
   font-size: 11px;
   line-height: 1.4;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .sectionTitle {

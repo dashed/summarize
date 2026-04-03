@@ -1,7 +1,11 @@
 import type { AssistantMessage, Message, ToolCall, ToolResultMessage } from "@mariozechner/pi-ai";
 import { extractYouTubeVideoId, shouldPreferUrlMode } from "@steipete/summarize-core/content/url";
+import { logDiagnostic } from "../../lib/diagnostics";
+import { urlsMatch } from "../../lib/url-match";
 import { SUMMARY_LENGTH_SPECS } from "@steipete/summarize-core/prompts";
+import katexPlugin from "@traptitech/markdown-it-katex";
 import MarkdownIt from "markdown-it";
+import "katex/dist/katex.min.css";
 import type { SummaryLength } from "../../../../../src/shared/contracts.js";
 import type { ChatMessage, PanelPhase, PanelState, RunStart, UiState } from "./types";
 import {
@@ -18,7 +22,12 @@ import { parseSseEvent, type SseSlidesData } from "../../../../../src/shared/sse
 import { listSkills } from "../../automation/skills-store";
 import { executeToolCall, getAutomationToolNames } from "../../automation/tools";
 import { readPresetOrCustomValue } from "../../lib/combo";
-import { buildIdleSubtitle } from "../../lib/header";
+import { buildIdleSubtitle, formatModelBadge } from "../../lib/header";
+import {
+  canonicalizeUrlForHistory,
+  isSpecificEnoughForHistoryLookup,
+  parseSummaryHistoryMeta,
+} from "../../lib/history";
 import { buildMetricsParts, buildMetricsTokens } from "../../lib/metrics";
 import {
   defaultSettings,
@@ -31,10 +40,24 @@ import { applyTheme } from "../../lib/theme";
 import { generateToken } from "../../lib/token";
 import { mountCheckbox } from "../../ui/zag-checkbox";
 import { ChatController } from "./chat-controller";
+import { buildChatHistoryStorageKey } from "./chat-history-store";
 import { type ChatHistoryLimits, compactChatHistory } from "./chat-state";
 import { createErrorController } from "./error-controller";
 import { createHeaderController } from "./header-controller";
-import { createPanelCacheController, type PanelCachePayload } from "./panel-cache";
+import {
+  detectContentTypeLabel,
+  extractDomain,
+  formatHistoryEntrySize,
+  isCurrentEntry,
+  resolveCurrentKey,
+  shouldMarkFirstAsCurrent,
+  shouldRefreshHistoryOnNavigation,
+} from "./history-utils";
+import {
+  createPanelCacheController,
+  resolveRestoreAction,
+  type PanelCachePayload,
+} from "./panel-cache";
 import {
   mountSidepanelLengthPicker,
   mountSidepanelPickers,
@@ -59,12 +82,19 @@ type PanelToBg =
       requestId: string;
       summary?: string | null;
     }
+  | {
+      type: "panel:save-chat-history";
+      messages: Message[];
+      summary?: string | null;
+      model?: string | null;
+    }
   | { type: "panel:seek"; seconds: number }
   | { type: "panel:ping" }
   | { type: "panel:closed" }
   | { type: "panel:rememberUrl"; url: string }
   | { type: "panel:setAuto"; value: boolean }
   | { type: "panel:setLength"; value: string }
+  | { type: "panel:setVideoDetailLevel"; value: "summary" | "detailed" }
   | { type: "panel:slides-context"; requestId: string; url?: string }
   | { type: "panel:cache"; cache: PanelCachePayload }
   | { type: "panel:get-cache"; requestId: string; tabId: number; url: string }
@@ -78,6 +108,7 @@ type BgToPanel =
   | { type: "slides:run"; ok: boolean; runId?: string; url?: string; error?: string }
   | { type: "chat:history"; requestId: string; ok: boolean; messages?: Message[]; error?: string }
   | { type: "agent:chunk"; requestId: string; text: string }
+  | { type: "agent:systemPrompt"; requestId: string; systemPrompt: string }
   | {
       type: "agent:response";
       requestId: string;
@@ -142,6 +173,8 @@ function byId<T extends HTMLElement>(id: string): T {
 }
 
 const subtitleEl = byId<HTMLDivElement>("subtitle");
+const elapsedEl = byId<HTMLSpanElement>("elapsed");
+const modelBadgeEl = byId<HTMLSpanElement>("modelBadge");
 const titleEl = byId<HTMLDivElement>("title");
 const headerEl = document.querySelector("header") as HTMLElement;
 if (!headerEl) throw new Error("Missing <header>");
@@ -189,11 +222,31 @@ const modelStatusEl = byId<HTMLDivElement>("modelStatus");
 const modelRowEl = byId<HTMLDivElement>("modelRow");
 const slidesLayoutEl = byId<HTMLSelectElement>("slidesLayout");
 
+const historyToggleBtn = byId<HTMLButtonElement>("historyToggle");
+const historyCloseBtn = byId<HTMLButtonElement>("historyClose");
+const historySubtitleEl = byId<HTMLSpanElement>("historySubtitle");
+const historyPanelEl = byId<HTMLElement>("historyPanel");
+const historyListEl = byId<HTMLDivElement>("historyList");
+const historyEmptyEl = byId<HTMLDivElement>("historyEmpty");
+const historyTabSummariesBtn = byId<HTMLButtonElement>("historyTabSummaries");
+const historyTabChatsBtn = byId<HTMLButtonElement>("historyTabChats");
+
+const systemPromptSectionEl = byId<HTMLDetailsElement>("systemPromptSection");
+const systemPromptContentEl = byId<HTMLPreElement>("systemPromptContent");
+const chatSystemPromptSectionEl = byId<HTMLDetailsElement>("chatSystemPromptSection");
+const chatSystemPromptContentEl = byId<HTMLPreElement>("chatSystemPromptContent");
+
 const chatContainerEl = byId<HTMLElement>("chatContainer");
 const chatMessagesEl = byId<HTMLDivElement>("chatMessages");
 const chatInputEl = byId<HTMLTextAreaElement>("chatInput");
 const chatSendBtn = byId<HTMLButtonElement>("chatSend");
 const chatContextStatusEl = byId<HTMLDivElement>("chatContextStatus");
+const summaryHistoryBannerEl = byId<HTMLDivElement>("summaryHistoryBanner");
+const summaryHistoryBannerTextEl = byId<HTMLSpanElement>("summaryHistoryBannerText");
+const summaryHistoryBannerDismissBtn = byId<HTMLButtonElement>("summaryHistoryBannerDismiss");
+const chatHistoryBannerEl = byId<HTMLDivElement>("chatHistoryBanner");
+const chatHistoryBannerTextEl = byId<HTMLSpanElement>("chatHistoryBannerText");
+const chatHistoryBannerDismissBtn = byId<HTMLButtonElement>("chatHistoryBannerDismiss");
 const automationNoticeEl = byId<HTMLDivElement>("automationNotice");
 const automationNoticeTitleEl = byId<HTMLDivElement>("automationNoticeTitle");
 const automationNoticeMessageEl = byId<HTMLDivElement>("automationNoticeMessage");
@@ -232,6 +285,7 @@ const slideTagPlugin = (markdown: MarkdownIt) => {
 };
 
 md.use(slideTagPlugin);
+md.use(katexPlugin, { throwOnError: false });
 
 const panelState: PanelState = {
   ui: null,
@@ -253,6 +307,7 @@ let automationEnabledValue = defaultSettings.automationEnabled;
 let slidesEnabledValue = defaultSettings.slidesEnabled;
 let slidesParallelValue = defaultSettings.slidesParallel;
 let slidesOcrEnabledValue = defaultSettings.slidesOcrEnabled;
+let videoDetailLevelValue: "summary" | "detailed" = defaultSettings.videoDetailLevel;
 let autoKickTimer = 0;
 
 const MAX_CHAT_MESSAGES = 1000;
@@ -268,7 +323,7 @@ type ChatQueueItem = {
   createdAt: number;
 };
 let chatQueue: ChatQueueItem[] = [];
-const chatHistoryCache = new Map<number, ChatMessage[]>();
+const chatHistoryCache = new Map<string, ChatMessage[]>();
 let chatHistoryLoadId = 0;
 let activeTabId: number | null = null;
 let activeTabUrl: string | null = null;
@@ -281,7 +336,13 @@ let inputMode: "page" | "video" = "page";
 let inputModeOverride: "page" | "video" | null = null;
 let mediaAvailable = false;
 let preserveChatOnNextReset = false;
+let resumeElapsedMs: number | null = null;
+let resumeTrackedProgress: number | null = null;
 let summarizeVideoLabel = "Video";
+let historyMode: "summaries" | "chats" = "summaries";
+let historyOpen = false;
+let loadedHistoryKey: string | null = null;
+let loadedChatHistoryKey: string | null = null;
 let summarizePageWords: number | null = null;
 let summarizeVideoDurationSeconds: number | null = null;
 
@@ -538,6 +599,10 @@ function handleAgentChunk(msg: Extract<BgToPanel, { type: "agent:chunk" }>) {
   pending.onChunk(msg.text);
 }
 
+function handleAgentSystemPrompt(msg: Extract<BgToPanel, { type: "agent:systemPrompt" }>) {
+  showChatSystemPrompt(msg.systemPrompt);
+}
+
 function handleChatHistoryResponse(msg: Extract<BgToPanel, { type: "chat:history" }>) {
   const pending = pendingChatHistoryRequests.get(msg.requestId);
   if (!pending) return;
@@ -623,6 +688,13 @@ renderEl.addEventListener("click", (event) => {
   void send({ type: "panel:seek", seconds });
 });
 
+function handleVideoDetailLevelChange(value: "summary" | "detailed") {
+  if (value === videoDetailLevelValue) return;
+  videoDetailLevelValue = value;
+  void send({ type: "panel:setVideoDetailLevel", value });
+  refreshSummarizeControl();
+}
+
 async function handleSummarizeControlChange(value: { mode: "page" | "video"; slides: boolean }) {
   const prevSlides = slidesEnabledValue;
   const prevMode = inputMode;
@@ -647,9 +719,6 @@ async function handleSummarizeControlChange(value: { mode: "page" | "video"; sli
   if (slidesEnabledValue && (inputModeOverride ?? inputMode) === "video") {
     maybeApplyPendingSlidesSummary();
     maybeStartPendingSlidesForUrl(activeTabUrl ?? null);
-  }
-  if (autoValue && (value.mode !== prevMode || value.slides !== prevSlides)) {
-    sendSummarize({ refresh: true });
   }
   refreshSummarizeControl();
 }
@@ -710,6 +779,8 @@ const summarizeControl = mountSummarizeControl(summarizeControlRoot, {
   slidesTextMode,
   slidesTextToggleVisible,
   onSlidesTextModeChange: handleSlidesTextModeChange,
+  videoDetailLevel: videoDetailLevelValue,
+  onVideoDetailLevelChange: handleVideoDetailLevelChange,
   onChange: handleSummarizeControlChange,
   onSummarize: () => sendSummarize(),
 });
@@ -726,6 +797,8 @@ function refreshSummarizeControl() {
     slidesTextMode,
     slidesTextToggleVisible,
     onSlidesTextModeChange: handleSlidesTextModeChange,
+    videoDetailLevel: videoDetailLevelValue,
+    onVideoDetailLevelChange: handleVideoDetailLevelChange,
     onChange: handleSummarizeControlChange,
     onSummarize: () => sendSummarize(),
   });
@@ -909,28 +982,6 @@ updateChatDockHeight();
 const chatDockObserver = new ResizeObserver(() => updateChatDockHeight());
 chatDockObserver.observe(chatDockEl);
 
-function normalizeUrl(value: string) {
-  try {
-    const url = new URL(value);
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-
-function urlsMatch(a: string, b: string) {
-  const left = normalizeUrl(a);
-  const right = normalizeUrl(b);
-  if (left === right) return true;
-  const boundaryMatch = (longer: string, shorter: string) => {
-    if (!longer.startsWith(shorter)) return false;
-    if (longer.length === shorter.length) return true;
-    const next = longer[shorter.length];
-    return next === "/" || next === "?" || next === "&";
-  };
-  return boundaryMatch(left, right) || boundaryMatch(right, left);
-}
 
 function markAgentNavigationIntent(url: string | null | undefined) {
   const trimmed = typeof url === "string" ? url.trim() : "";
@@ -980,15 +1031,21 @@ function shouldPreserveChatForRun(url: string) {
   return isRecentAgentNavigation(null, url);
 }
 
-async function migrateChatHistory(fromTabId: number | null, toTabId: number | null) {
-  if (!fromTabId || !toTabId || fromTabId === toTabId) return;
+async function migrateChatHistory(
+  fromTabId: number | null,
+  toTabId: number | null,
+  url: string | null,
+) {
+  if (!fromTabId || !toTabId || !url) return;
   const messages = chatController.getMessages();
   if (messages.length === 0) return;
-  chatHistoryCache.set(toTabId, messages);
+  const key = getChatHistoryKey(toTabId, url);
+  if (!key) return;
+  chatHistoryCache.set(key, messages);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.set({ [getChatHistoryKey(toTabId)]: messages });
+    await store.set({ [key]: messages });
   } catch {
     // ignore
   }
@@ -1096,6 +1153,7 @@ function resetSummaryView({
   if (stopSlides) {
     stopSlidesStream();
   }
+  hideSystemPrompt();
   refreshSummarizeControl();
   if (!preserveChat) {
     resetChatState();
@@ -1112,6 +1170,7 @@ async function clearCurrentView() {
   await clearChatHistoryForActiveTab();
   panelCacheController.scheduleSync();
   headerController.setStatus("");
+  clearElapsedTimer();
   setPhase("idle");
 }
 
@@ -1130,6 +1189,8 @@ function buildPanelCachePayload(): PanelCachePayload | null {
     lastMeta: panelState.lastMeta,
     slides: panelState.slides ?? null,
     transcriptTimedText: slidesTranscriptTimedText ?? null,
+    elapsedMs: elapsedTimerId != null ? performance.now() - elapsedStart : null,
+    trackedProgress: headerController.getProgress() || null,
   };
 }
 
@@ -1150,6 +1211,7 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
       model: panelState.lastMeta.model,
     }),
   );
+  updateModelBadge();
   setSlidesTranscriptTimedText(payload.transcriptTimedText ?? null);
   if (payload.slides) {
     panelState.slides = {
@@ -1180,10 +1242,29 @@ function applyPanelCache(payload: PanelCachePayload, opts?: { preserveChat?: boo
     summaryFromCache: payload.summaryFromCache,
     hasSlides: Boolean(payload.slides && payload.slides.slides.length > 0),
   });
-  if (payload.summaryMarkdown) {
-    renderMarkdown(payload.summaryMarkdown);
+  const action = resolveRestoreAction(payload);
+  if (action.kind === "render") {
+    renderMarkdown(action.markdown);
+  } else if (action.kind === "reconnect") {
+    // Tab had an in-progress summarization — reconnect to daemon SSE replay.
+    // Pre-seed resume values so the stream's onReset continues the timer
+    // and progress bar from where they were instead of resetting to 0.
+    resumeElapsedMs = payload.elapsedMs ?? null;
+    resumeTrackedProgress = payload.trackedProgress ?? null;
+    void streamController.start({
+      id: action.runId,
+      url: action.url,
+      title: action.title,
+      model: "",
+      reason: "tab-restore",
+    });
+    return;
   } else {
     renderMarkdownDisplay();
+    // Cache had no summary — try to restore from daemon history.
+    if (payload.url) {
+      void restoreSummaryFromHistory(payload.url);
+    }
   }
   queueSlidesRender();
   setPhase("idle");
@@ -2483,6 +2564,72 @@ const autoToggle = mountCheckbox(autoToggleRoot, {
   },
 });
 
+function updateChatPlaceholder() {
+  if (loadedChatHistoryKey) {
+    chatInputEl.placeholder = "Continue this saved chat\u2026";
+    return;
+  }
+  const url = panelState.currentSource?.url ?? activeTabUrl;
+  const label = detectContentTypeLabel(url);
+  chatInputEl.placeholder = `Ask about this ${label}\u2026`;
+}
+
+function showSystemPrompt(prompt: string | null | undefined) {
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    systemPromptSectionEl.classList.add("hidden");
+    systemPromptContentEl.textContent = "";
+    return;
+  }
+  systemPromptContentEl.textContent = prompt;
+  systemPromptSectionEl.classList.remove("hidden");
+}
+
+function hideSystemPrompt() {
+  systemPromptSectionEl.classList.add("hidden");
+  systemPromptSectionEl.removeAttribute("open");
+  systemPromptContentEl.textContent = "";
+}
+
+function showChatSystemPrompt(prompt: string | null | undefined) {
+  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+    chatSystemPromptSectionEl.classList.add("hidden");
+    chatSystemPromptContentEl.textContent = "";
+    return;
+  }
+  chatSystemPromptContentEl.textContent = prompt;
+  chatSystemPromptSectionEl.classList.remove("hidden");
+}
+
+function hideChatSystemPrompt() {
+  chatSystemPromptSectionEl.classList.add("hidden");
+  chatSystemPromptSectionEl.removeAttribute("open");
+  chatSystemPromptContentEl.textContent = "";
+}
+
+async function fetchSystemPromptForCurrentSummary() {
+  const url = panelState.currentSource?.url ?? activeTabUrl;
+  if (!url) return;
+  const canonical = canonicalizeUrlForHistory(url);
+  if (!canonical) return;
+  const token = await getAuthToken();
+  if (!token) return;
+  try {
+    const res = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&match=canonical&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data = (await res.json()) as { ok?: boolean; summaries?: Array<{ key: string; metadata?: Record<string, unknown> }> };
+    if (!data.ok || !data.summaries?.length) return;
+    const entry = data.summaries[0];
+    const sp = entry.metadata?.systemPrompt;
+    if (typeof sp === "string" && sp.trim()) {
+      showSystemPrompt(sp);
+    }
+  } catch {
+    // ignore — system prompt display is best-effort
+  }
+}
+
 function applyChatEnabled() {
   chatContainerEl.toggleAttribute("hidden", !chatEnabledValue);
   chatDockEl.toggleAttribute("hidden", !chatEnabledValue);
@@ -2498,8 +2645,17 @@ function applyChatEnabled() {
   }
 }
 
-function getChatHistoryKey(tabId: number) {
-  return `chat:tab:${tabId}`;
+function getChatHistoryKey(tabId: number, url: string | null | undefined) {
+  if (!url) return null;
+  return buildChatHistoryStorageKey(tabId, url);
+}
+
+function getCurrentChatHistoryUrl() {
+  const sourceUrl = panelState.currentSource?.url ?? null;
+  if (activeTabUrl && sourceUrl && !urlsMatch(sourceUrl, activeTabUrl)) {
+    return activeTabUrl;
+  }
+  return sourceUrl ?? activeTabUrl;
 }
 
 function buildEmptyUsage() {
@@ -2565,29 +2721,35 @@ function normalizeStoredMessage(raw: Record<string, unknown>): ChatMessage | nul
   return null;
 }
 
-async function clearChatHistoryForTab(tabId: number | null) {
+async function clearChatHistoryForTab(tabId: number | null, url: string | null | undefined) {
   if (!tabId) return;
-  chatHistoryCache.delete(tabId);
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return;
+  chatHistoryCache.delete(key);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.remove(getChatHistoryKey(tabId));
+    await store.remove(key);
   } catch {
     // ignore
   }
 }
 
 async function clearChatHistoryForActiveTab() {
-  await clearChatHistoryForTab(activeTabId);
+  await clearChatHistoryForTab(activeTabId, getCurrentChatHistoryUrl());
 }
 
-async function loadChatHistory(tabId: number): Promise<ChatMessage[] | null> {
-  const cached = chatHistoryCache.get(tabId);
+async function loadChatHistory(
+  tabId: number,
+  url: string | null | undefined,
+): Promise<ChatMessage[] | null> {
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return null;
+  const cached = chatHistoryCache.get(key);
   if (cached) return cached;
   const store = chrome.storage?.session;
   if (!store) return null;
   try {
-    const key = getChatHistoryKey(tabId);
     const res = await store.get(key);
     const raw = res?.[key];
     if (!Array.isArray(raw)) return null;
@@ -2596,7 +2758,7 @@ async function loadChatHistory(tabId: number): Promise<ChatMessage[] | null> {
       .map((msg) => normalizeStoredMessage(msg as Record<string, unknown>))
       .filter((msg): msg is ChatMessage => Boolean(msg));
     if (!parsed.length) return null;
-    chatHistoryCache.set(tabId, parsed);
+    chatHistoryCache.set(key, parsed);
     return parsed;
   } catch {
     return null;
@@ -2607,30 +2769,47 @@ async function persistChatHistory() {
   if (!chatEnabledValue) return;
   const tabId = activeTabId;
   if (!tabId) return;
+  const url = getCurrentChatHistoryUrl();
+  const key = getChatHistoryKey(tabId, url);
+  if (!key) return;
   const compacted = compactChatHistory(chatController.getMessages(), chatLimits);
   if (compacted.length !== chatController.getMessages().length) {
     chatController.setMessages(compacted, { scroll: false });
   }
-  chatHistoryCache.set(tabId, compacted);
+  chatHistoryCache.set(key, compacted);
   const store = chrome.storage?.session;
   if (!store) return;
   try {
-    await store.set({ [getChatHistoryKey(tabId)]: compacted });
+    await store.set({ [key]: compacted });
   } catch {
     // ignore
+  }
+
+  if (compacted.length > 0) {
+    void send({
+      type: "panel:save-chat-history",
+      messages: compacted,
+      summary: panelState.summaryMarkdown,
+      model: panelState.lastMeta?.model ?? null,
+    });
   }
 }
 
 async function restoreChatHistory() {
   const tabId = activeTabId;
   if (!tabId) return;
+  const url = getCurrentChatHistoryUrl();
   chatHistoryLoadId += 1;
   const loadId = chatHistoryLoadId;
-  const history = await loadChatHistory(tabId);
+  const history = await loadChatHistory(tabId, url);
   if (loadId !== chatHistoryLoadId) return;
   if (history?.length) {
     const compacted = compactChatHistory(history, chatLimits);
     chatController.setMessages(compacted, { scroll: false });
+    // Chat restored but summary may be missing — try to restore from daemon history.
+    if (!panelState.summaryMarkdown && activeTabUrl) {
+      void restoreSummaryFromHistory(activeTabUrl);
+    }
     return;
   }
 
@@ -2646,9 +2825,123 @@ async function restoreChatHistory() {
     if (!parsed.length) return;
     const compacted = compactChatHistory(parsed, chatLimits);
     chatController.setMessages(compacted, { scroll: false });
+    // Chat restored but summary may be missing — try to restore from daemon history.
+    if (!panelState.summaryMarkdown && activeTabUrl) {
+      void restoreSummaryFromHistory(activeTabUrl);
+    }
     await persistChatHistory();
   } catch {
     // ignore
+  }
+}
+
+/**
+ * When the panel cache is lost (e.g. background worker recycled, extension restarted),
+ * try to restore the most recent summary for a URL from the daemon's history store.
+ * This mirrors how `restoreChatHistory()` falls back to the daemon for chat messages.
+ */
+let summaryRestoreLoadId = 0;
+
+async function restoreSummaryFromHistory(url: string) {
+  console.log(
+    "[restoreSummary] called for:",
+    url,
+    "existing summary:",
+    !!panelState.summaryMarkdown,
+  );
+  if (panelState.summaryMarkdown) return;
+  summaryRestoreLoadId += 1;
+  const loadId = summaryRestoreLoadId;
+  try {
+    const token = await getAuthToken();
+    if (!token) {
+      console.log("[restoreSummary] no token");
+      return;
+    }
+    const canonical = canonicalizeUrlForHistory(url);
+    if (!canonical) {
+      console.log("[restoreSummary] no canonical url");
+      return;
+    }
+    if (!isSpecificEnoughForHistoryLookup(canonical)) {
+      console.log("[restoreSummary] URL too broad for history lookup, skipping:", canonical);
+      return;
+    }
+    console.log("[restoreSummary] fetching list for canonical:", canonical);
+    const listRes = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries?url=${encodeURIComponent(canonical)}&match=canonical&limit=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const listData = (await listRes.json()) as {
+      ok?: boolean;
+      summaries?: Array<{ key: string; metadata: Record<string, unknown> | null }>;
+    };
+    console.log("[restoreSummary] list response:", {
+      ok: listData.ok,
+      count: listData.summaries?.length,
+    });
+    if (loadId !== summaryRestoreLoadId) {
+      console.log("[restoreSummary] stale loadId");
+      return;
+    }
+    if (!listData.ok || !listData.summaries?.length) {
+      console.log("[restoreSummary] no summaries found");
+      return;
+    }
+    if (panelState.summaryMarkdown) {
+      console.log("[restoreSummary] summary already set");
+      return;
+    }
+    if (activeTabUrl && url && !urlsMatch(activeTabUrl, url)) {
+      console.log("[restoreSummary] url changed:", activeTabUrl, "!==", url);
+      return;
+    }
+    const entry = listData.summaries[0];
+    console.log("[restoreSummary] fetching detail for key:", entry.key);
+    const detailRes = await fetch(
+      `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(entry.key)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const detailData = (await detailRes.json()) as {
+      ok?: boolean;
+      value?: string;
+      metadata?: Record<string, unknown> | null;
+    };
+    console.log("[restoreSummary] detail response:", {
+      ok: detailData.ok,
+      hasValue: !!detailData.value,
+      valueLen: detailData.value?.length,
+    });
+    if (loadId !== summaryRestoreLoadId) {
+      console.log("[restoreSummary] stale loadId (2)");
+      return;
+    }
+    if (!detailData.ok || !detailData.value) {
+      console.log("[restoreSummary] no value in detail");
+      return;
+    }
+    if (panelState.summaryMarkdown) {
+      console.log("[restoreSummary] summary already set (2)");
+      return;
+    }
+    if (activeTabUrl && url && !urlsMatch(activeTabUrl, url)) {
+      console.log("[restoreSummary] url changed (2)");
+      return;
+    }
+    console.log("[restoreSummary] rendering summary, length:", detailData.value.length);
+    renderMarkdown(detailData.value);
+    const meta = detailData.metadata ?? entry.metadata;
+    const { title, model } = parseSummaryHistoryMeta(meta);
+    // Mark currentSource so updateControls doesn't overwrite our header on the next ui:state.
+    panelState.currentSource = { url, title };
+    headerController.setBaseTitle(title);
+    headerController.setBaseSubtitle("");
+    panelState.lastMeta = { ...panelState.lastMeta, model };
+    updateModelBadge();
+    showSystemPrompt(meta?.systemPrompt as string | undefined);
+    setPhase("idle");
+  } catch (err) {
+    console.warn("[restoreSummary] error:", err);
   }
 }
 
@@ -2735,6 +3028,11 @@ function updateModelRowUI() {
   modelCustomEl.hidden = !isCustom;
   modelRowEl.classList.toggle("isCustom", isCustom);
   modelRefreshBtn.hidden = modelPresetEl.value !== "free";
+}
+
+function updateModelBadge() {
+  const resolved = panelState.lastMeta.model || readCurrentModelValue();
+  modelBadgeEl.textContent = formatModelBadge(resolved);
 }
 
 function setModelValue(value: string) {
@@ -3093,6 +3391,36 @@ const slidesSummaryController = createStreamController({
   },
 });
 
+/* ---------- Elapsed timer ---------- */
+let elapsedTimerId: ReturnType<typeof setInterval> | null = null;
+let elapsedStart = 0;
+
+function startElapsedTimer(offsetMs = 0) {
+  stopElapsedTimer();
+  elapsedStart = performance.now() - offsetMs;
+  const sec = offsetMs / 1000;
+  elapsedEl.textContent = `${sec.toFixed(1)}s`;
+  elapsedTimerId = setInterval(() => {
+    const sec = (performance.now() - elapsedStart) / 1000;
+    elapsedEl.textContent = `${sec.toFixed(1)}s`;
+  }, 100);
+}
+
+function stopElapsedTimer(finalMs?: number) {
+  if (elapsedTimerId != null) {
+    clearInterval(elapsedTimerId);
+    elapsedTimerId = null;
+  }
+  if (finalMs != null && finalMs > 0) {
+    elapsedEl.textContent = `${(finalMs / 1000).toFixed(1)}s`;
+  }
+}
+
+function clearElapsedTimer() {
+  stopElapsedTimer();
+  elapsedEl.textContent = "";
+}
+
 const streamController = createStreamController({
   getToken: async () => (await loadSettings()).token,
   onReset: () => {
@@ -3108,6 +3436,18 @@ const streamController = createStreamController({
       };
     }
     lastStreamError = null;
+    if (resumeTrackedProgress != null && resumeTrackedProgress > 0) {
+      headerController.setProgress(resumeTrackedProgress);
+      resumeTrackedProgress = null;
+    } else {
+      headerController.resetProgress();
+    }
+    if (resumeElapsedMs != null && resumeElapsedMs > 0) {
+      startElapsedTimer(resumeElapsedMs);
+      resumeElapsedMs = null;
+    } else {
+      startElapsedTimer();
+    }
     if (pendingRunForPlannedSlides) {
       seedPlannedSlidesForRun(pendingRunForPlannedSlides);
       pendingRunForPlannedSlides = null;
@@ -3124,15 +3464,18 @@ const streamController = createStreamController({
   onPhaseChange: (phase) => {
     if (phase === "error") {
       setPhase("error", { error: lastStreamError ?? panelState.error });
+      stopElapsedTimer();
     } else {
       setPhase(phase);
     }
     if (phase === "idle") {
+      stopElapsedTimer();
       maybeApplyPendingSlidesSummary();
       if (panelState.slides && slideSummaryByIndex.size === 0) {
         rebuildSlideDescriptions();
         queueSlidesRender();
       }
+      void fetchSystemPromptForCurrentSummary();
     }
   },
   onRememberUrl: (url) => void send({ type: "panel:rememberUrl", url }),
@@ -3153,6 +3496,7 @@ const streamController = createStreamController({
         model: panelState.lastMeta.model,
       }),
     );
+    updateModelBadge();
     panelCacheController.scheduleSync();
   },
   onSlides: (data) => {
@@ -3164,14 +3508,16 @@ const streamController = createStreamController({
     panelCacheController.scheduleSync();
     if (value === true) {
       headerController.stopProgress();
+      clearElapsedTimer();
     } else if (value === false && isStreaming()) {
       headerController.armProgress();
     }
   },
-  onMetrics: (summary) => {
+  onMetrics: (metrics) => {
+    stopElapsedTimer(metrics.elapsedMs);
     setMetricsForMode(
       "summary",
-      summary,
+      metrics.summary,
       panelState.lastMeta.inputSummary,
       panelState.currentSource?.url ?? null,
     );
@@ -3484,6 +3830,7 @@ function updateControls(state: UiState) {
   const nextVideoLabel = state.media?.hasAudio && !state.media.hasVideo ? "Audio" : "Video";
 
   if (tabChanged) {
+    logDiagnostic("panel", "tab-changed", { previousTabId: activeTabId, nextTabId, previousUrl: activeTabUrl, nextUrl: nextTabUrl }, { url: nextTabUrl ?? undefined, tabId: nextTabId ?? undefined });
     const initialTabHydration = activeTabId === null && nextTabId !== null && hasActiveChat;
     const preserveChat = initialTabHydration || isRecentAgentNavigation(nextTabId, nextTabUrl);
     if (preserveChat) {
@@ -3496,53 +3843,71 @@ function updateControls(state: UiState) {
       requestAgentAbort("Tab changed");
     }
     if (!preserveChat) {
-      void clearChatHistoryForActiveTab();
       resetChatState();
     } else {
-      void migrateChatHistory(previousTabId, nextTabId);
+      void migrateChatHistory(previousTabId, nextTabId, nextTabUrl);
     }
     inputMode = preferUrlMode ? "video" : "page";
     inputModeOverride = null;
     if (nextTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(nextTabId, nextTabUrl);
+      console.log("[tabSwitch] resolve:", {
+        nextTabId,
+        nextTabUrl,
+        hasCached: !!cached,
+        hasSummary: !!cached?.summaryMarkdown,
+      });
       if (cached) {
+        panelCacheController.syncNow();
+        streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        panelCacheController.syncNow();
+        streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
         resetSummaryView({ preserveChat });
         panelCacheController.request(nextTabId, nextTabUrl, preserveChat);
       }
     } else {
+      panelCacheController.syncNow();
+      streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
       resetSummaryView({ preserveChat });
     }
   } else if (urlChanged) {
+    logDiagnostic("panel", "url-changed", { previousUrl: activeTabUrl, nextUrl: nextTabUrl, tabId: activeTabId }, { url: nextTabUrl ?? undefined, tabId: activeTabId ?? undefined });
     const previousTabUrl = activeTabUrl;
     activeTabUrl = nextTabUrl;
     const initialUrlHydration = previousTabUrl === null && nextTabUrl !== null && hasActiveChat;
     const preserveChat = initialUrlHydration || isRecentAgentNavigation(activeTabId, nextTabUrl);
     if (preserveChat) {
       notePreserveChatForUrl(nextTabUrl);
+      void migrateChatHistory(activeTabId, activeTabId, nextTabUrl);
     } else if (
       chatEnabledValue &&
       (panelState.chatStreaming || chatController.getMessages().length > 0)
     ) {
-      void clearChatHistoryForActiveTab();
       resetChatState();
     }
     if (activeTabId && nextTabUrl) {
       const cached = panelCacheController.resolve(activeTabId, nextTabUrl);
       if (cached) {
+        panelCacheController.syncNow();
+        streamController.abort();
         applyPanelCache(cached, { preserveChat });
       } else {
+        panelCacheController.syncNow();
+        streamController.abort();
         panelState.currentSource = null;
         currentRunTabId = null;
         resetSummaryView({ preserveChat });
         panelCacheController.request(activeTabId, nextTabUrl, preserveChat);
       }
     } else {
+      panelCacheController.syncNow();
+      streamController.abort();
       panelState.currentSource = null;
       currentRunTabId = null;
       resetSummaryView({ preserveChat });
@@ -3560,6 +3925,16 @@ function updateControls(state: UiState) {
     }
   }
 
+  if (shouldRefreshHistoryOnNavigation(tabChanged, urlChanged, historyOpen)) {
+    void loadHistory();
+  }
+
+  if (tabChanged || urlChanged) {
+    updateChatPlaceholder();
+    summaryHistoryBannerEl.classList.add("hidden");
+    loadedHistoryKey = null;
+  }
+
   autoValue = state.settings.autoSummarize;
   autoToggle.update({
     id: "sidepanel-auto",
@@ -3574,6 +3949,7 @@ function updateControls(state: UiState) {
   automationEnabledValue = state.settings.automationEnabled;
   slidesEnabledValue = state.settings.slidesEnabled;
   slidesParallelValue = state.settings.slidesParallel;
+  videoDetailLevelValue = state.settings.videoDetailLevel ?? "detailed";
   const nextSlidesOcrEnabled = Boolean(state.settings.slidesOcrEnabled);
   if (nextSlidesOcrEnabled !== slidesOcrEnabledValue) {
     slidesOcrEnabledValue = nextSlidesOcrEnabled;
@@ -3627,6 +4003,7 @@ function updateControls(state: UiState) {
     setModelValue(state.settings.model);
   }
   updateModelRowUI();
+  updateModelBadge();
   modelRefreshBtn.disabled = !state.settings.tokenPresent || refreshFreeRunning;
   if (panelState.currentSource) {
     if (state.tab.url && !urlsMatch(state.tab.url, panelState.currentSource.url)) {
@@ -3647,6 +4024,7 @@ function updateControls(state: UiState) {
     panelState.lastMeta = { inputSummary: null, model: null, modelLabel: null };
     headerController.setBaseTitle(state.tab.title || state.tab.url || "Summarize");
     headerController.setBaseSubtitle("");
+    updateModelBadge();
   }
   if (!isStreaming()) {
     headerController.setStatus(state.status);
@@ -3665,6 +4043,22 @@ function updateControls(state: UiState) {
     setPhase("setup");
   } else if (!showingSetup && panelState.phase === "setup") {
     setPhase("idle");
+  }
+  updateStatusBar(state);
+}
+
+function updateStatusBar(state: UiState) {
+  const bar = document.getElementById("statusBar");
+  const textEl = document.getElementById("statusBarText");
+  if (!bar || !textEl) return;
+  if (state.daemon.ok && state.daemon.authed) {
+    bar.dataset.state = "ok";
+    const v = state.daemon.version ? `v${state.daemon.version}` : "";
+    const c = state.daemon.commit ?? "";
+    textEl.textContent = v && c ? `${v} \u00B7 ${c}` : v || "Connected";
+  } else {
+    bar.dataset.state = "error";
+    textEl.textContent = "Daemon disconnected";
   }
 }
 
@@ -3732,9 +4126,38 @@ function handleBgMessage(msg: BgToPanel) {
     }
     case "ui:cache": {
       const result = panelCacheController.consumeResponse(msg);
+      console.log(
+        "[ui:cache] consumeResponse:",
+        result
+          ? {
+              tabId: result.tabId,
+              url: result.url,
+              hasCache: !!result.cache,
+              hasSummary: !!result.cache?.summaryMarkdown,
+            }
+          : null,
+      );
       if (!result) return;
-      if (activeTabId !== result.tabId || activeTabUrl !== result.url) return;
-      if (!result.cache) return;
+      if (activeTabId !== result.tabId || activeTabUrl !== result.url) {
+        console.log(
+          "[ui:cache] tab/url mismatch, activeTabId:",
+          activeTabId,
+          "activeTabUrl:",
+          activeTabUrl,
+        );
+        return;
+      }
+      if (!result.cache) {
+        // Cache lost (background worker recycled, extension restarted) —
+        // try to restore the summary from daemon history as a fallback.
+        console.log("[ui:cache] no cache, calling restoreSummaryFromHistory for:", result.url);
+        void restoreSummaryFromHistory(result.url);
+        return;
+      }
+      console.log(
+        "[ui:cache] applying panel cache, summaryMarkdown length:",
+        result.cache.summaryMarkdown?.length ?? 0,
+      );
       applyPanelCache(result.cache, { preserveChat: result.preserveChat });
       return;
     }
@@ -3742,6 +4165,8 @@ function handleBgMessage(msg: BgToPanel) {
       stopSlidesStream();
       setPhase("connecting");
       lastAction = "summarize";
+      loadedHistoryKey = null;
+      summaryHistoryBannerEl.classList.add("hidden");
       window.clearTimeout(autoKickTimer);
       if (panelState.chatStreaming) {
         finishStreamingMessage();
@@ -3779,6 +4204,9 @@ function handleBgMessage(msg: BgToPanel) {
     case "agent:chunk":
       handleAgentChunk(msg);
       return;
+    case "agent:systemPrompt":
+      handleAgentSystemPrompt(msg);
+      return;
     case "agent:response":
       handleAgentResponse(msg);
       return;
@@ -3812,6 +4240,7 @@ async function send(message: PanelToBg) {
 }
 
 function sendSummarize(opts?: { refresh?: boolean }) {
+  logDiagnostic("panel", "summarize-clicked", { refresh: Boolean(opts?.refresh), activeTabUrl, activeTabId, currentSourceUrl: panelState.currentSource?.url ?? null }, { url: activeTabUrl ?? undefined, tabId: activeTabId ?? undefined });
   errorController.clearInlineError();
   void send({
     type: "panel:summarize",
@@ -3909,6 +4338,305 @@ function parseTimestampHref(href: string): number | null {
   return Math.floor(seconds);
 }
 
+/* ── History helpers ──────────────────────────────── */
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "\u2026" : s;
+}
+
+async function getAuthToken(): Promise<string> {
+  return (await loadSettings()).token.trim();
+}
+
+async function loadHistory() {
+  const token = await getAuthToken();
+  if (!token) {
+    historyListEl.innerHTML = '<div class="historyEmpty">No daemon token configured</div>';
+    return;
+  }
+  const currentUrl = panelState.currentSource?.url ?? activeTabUrl ?? "";
+  const domain = extractDomain(currentUrl);
+  historySubtitleEl.textContent = domain ? `\u00b7 ${domain}` : "";
+  const canonical = currentUrl ? canonicalizeUrlForHistory(currentUrl) : "";
+  const urlParam = canonical ? `&url=${encodeURIComponent(canonical)}&match=canonical` : "";
+  const endpoint =
+    historyMode === "summaries"
+      ? `http://127.0.0.1:8787/v1/history/summaries?limit=50${urlParam}`
+      : `http://127.0.0.1:8787/v1/history/chats?limit=50${urlParam}`;
+
+  try {
+    const res = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      summaries?: Array<{
+        key: string;
+        created_at: number;
+        size_bytes: number;
+        metadata: Record<string, unknown> | null;
+      }>;
+      chats?: Array<{
+        key: string;
+        created_at: number;
+        size_bytes: number;
+        metadata: Record<string, unknown> | null;
+      }>;
+    };
+    const entries = data.summaries ?? data.chats ?? [];
+    const hasSummaryDisplayed = panelState.summaryMarkdown != null && panelState.phase === "idle";
+    const hasChatActive = chatController.getMessages().length > 0;
+    const currentKey = resolveCurrentKey(historyMode, loadedHistoryKey, loadedChatHistoryKey);
+    const markFirst = shouldMarkFirstAsCurrent(
+      historyMode,
+      hasSummaryDisplayed,
+      loadedHistoryKey,
+      hasChatActive,
+      loadedChatHistoryKey,
+    );
+    renderHistoryList(entries, currentKey, markFirst);
+  } catch {
+    historyListEl.innerHTML = '<div class="historyEmpty">Could not load history</div>';
+  }
+}
+
+function renderHistoryList(
+  entries: Array<{
+    key: string;
+    created_at: number;
+    size_bytes: number;
+    metadata: Record<string, unknown> | null;
+  }>,
+  currentKey: string | null = null,
+  markFirstAsCurrent = false,
+) {
+  if (entries.length === 0) {
+    historyListEl.innerHTML = "";
+    historyEmptyEl.classList.remove("hidden");
+    return;
+  }
+  historyEmptyEl.classList.add("hidden");
+
+  historyListEl.innerHTML = entries
+    .map((entry, index) => {
+      const meta = entry.metadata ?? {};
+      const date = new Date(entry.created_at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const title = String(meta.title || meta.url || "Unknown");
+      const url = String(meta.url || "");
+      const model = String(meta.model || "");
+      const sizeLabel = formatHistoryEntrySize(historyMode, meta, entry.size_bytes);
+      const isCurrent = isCurrentEntry(entry.key, index, currentKey, markFirstAsCurrent);
+
+      return `<button class="historyItem${isCurrent ? " isCurrent" : ""}" data-key="${escapeHtml(entry.key)}" data-mode="${historyMode}">
+      <div class="historyItem__title">${escapeHtml(truncate(title, 60))}${isCurrent ? ' <span class="historyItem__badge">Current</span>' : ""}</div>
+      <div class="historyItem__meta">
+        <span class="historyItem__date">${date}</span>
+        ${model ? `<span class="historyItem__model">${escapeHtml(model)}</span>` : ""}
+        ${sizeLabel ? `<span class="historyItem__chars">${escapeHtml(sizeLabel)}</span>` : ""}
+      </div>
+      ${url ? `<div class="historyItem__url">${escapeHtml(truncate(url, 50))}</div>` : ""}
+      ${meta.preview ? `<div class="historyItem__preview">${escapeHtml(truncate(String(meta.preview), 100))}</div>` : ""}
+      <button class="historyItem__delete" data-delete-key="${escapeHtml(entry.key)}" data-delete-mode="${historyMode}" aria-label="Delete" title="Delete">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+      </button>
+    </button>`;
+    })
+    .join("");
+
+  for (const el of Array.from(historyListEl.querySelectorAll(".historyItem"))) {
+    el.addEventListener("click", () => {
+      const btn = el as HTMLElement;
+      void loadHistoryEntry(btn.dataset.key!, btn.dataset.mode!);
+    });
+  }
+  for (const el of Array.from(historyListEl.querySelectorAll(".historyItem__delete"))) {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const btn = el as HTMLElement;
+      void deleteHistoryEntry(btn.dataset.deleteKey!, btn.dataset.deleteMode!);
+    });
+  }
+}
+
+async function deleteHistoryEntry(key: string, mode: string) {
+  const token = await getAuthToken();
+  if (!token) return;
+  const endpoint =
+    mode === "summaries"
+      ? `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(key)}`
+      : `http://127.0.0.1:8787/v1/history/chats/${encodeURIComponent(key)}`;
+  try {
+    const res = await fetch(endpoint, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as { ok?: boolean };
+    if (data.ok) {
+      void loadHistory();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function loadHistoryEntry(key: string, mode: string) {
+  if (mode === "summaries") {
+    const token = await getAuthToken();
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8787/v1/history/summaries/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        value?: string;
+        created_at?: number;
+        metadata?: Record<string, unknown> | null;
+      };
+      if (data.ok && data.value) {
+        loadedHistoryKey = key;
+        renderMarkdown(data.value);
+        const { title, model } = parseSummaryHistoryMeta(data.metadata);
+        headerController.setBaseTitle(title);
+        headerController.setBaseSubtitle("");
+        panelState.lastMeta = { ...panelState.lastMeta, model };
+        updateModelBadge();
+        setPhase("idle");
+        const dateStr = data.created_at
+          ? new Date(data.created_at).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "";
+        summaryHistoryBannerTextEl.textContent = `Viewing saved summary${dateStr ? ` \u00b7 ${dateStr}` : ""}`;
+        summaryHistoryBannerEl.classList.remove("hidden");
+        showSystemPrompt(data.metadata?.systemPrompt as string | undefined);
+        historyOpen = false;
+        historyPanelEl.classList.add("hidden");
+        historyToggleBtn.classList.remove("isActive");
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (mode === "chats") {
+    const token = await getAuthToken();
+    if (!token) return;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:8787/v1/history/chats/${encodeURIComponent(key)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        value?: string;
+        created_at?: number;
+        metadata?: Record<string, unknown> | null;
+      };
+      if (data.ok && data.value) {
+        const raw = JSON.parse(data.value) as unknown[];
+        const parsed = raw
+          .filter((msg) => msg && typeof msg === "object")
+          .map((msg) => normalizeStoredMessage(msg as Record<string, unknown>))
+          .filter((msg): msg is ChatMessage => Boolean(msg));
+        if (parsed.length) {
+          resetChatState();
+          const compacted = compactChatHistory(parsed, chatLimits);
+          chatController.setMessages(compacted, { scroll: true });
+          loadedChatHistoryKey = key;
+          const dateStr = data.created_at
+            ? new Date(data.created_at).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "unknown date";
+          const msgCount = data.metadata?.messageCount ?? parsed.length;
+          chatHistoryBannerTextEl.textContent = `Viewing saved chat \u00b7 ${dateStr} \u00b7 ${msgCount} messages`;
+          chatHistoryBannerEl.classList.remove("hidden");
+          showChatSystemPrompt(data.metadata?.systemPrompt as string | undefined);
+          updateChatPlaceholder();
+          void loadHistory();
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function toggleHistoryPanel() {
+  historyOpen = !historyOpen;
+  historyPanelEl.classList.toggle("hidden", !historyOpen);
+  historyToggleBtn.classList.toggle("isActive", historyOpen);
+  if (historyOpen) {
+    // Close drawer if open
+    toggleDrawer(false);
+    void loadHistory();
+  }
+}
+
+historyToggleBtn.addEventListener("click", () => toggleHistoryPanel());
+historyCloseBtn.addEventListener("click", () => {
+  historyOpen = false;
+  historyPanelEl.classList.add("hidden");
+  historyToggleBtn.classList.remove("isActive");
+});
+
+summaryHistoryBannerDismissBtn.addEventListener("click", () => {
+  loadedHistoryKey = null;
+  summaryHistoryBannerEl.classList.add("hidden");
+  hideSystemPrompt();
+  if (activeTabId && activeTabUrl) {
+    const cached = panelCacheController.resolve(activeTabId, activeTabUrl);
+    if (cached) {
+      applyPanelCache(cached, { preserveChat: true });
+    }
+  }
+  if (historyOpen) void loadHistory();
+});
+
+chatHistoryBannerDismissBtn.addEventListener("click", () => {
+  loadedChatHistoryKey = null;
+  chatHistoryBannerEl.classList.add("hidden");
+  hideSystemPrompt();
+  hideChatSystemPrompt();
+  resetChatState();
+  void restoreChatHistory();
+  if (historyOpen) void loadHistory();
+});
+
+historyTabSummariesBtn.addEventListener("click", () => {
+  historyMode = "summaries";
+  historyTabSummariesBtn.classList.add("active");
+  historyTabChatsBtn.classList.remove("active");
+  void loadHistory();
+});
+
+historyTabChatsBtn.addEventListener("click", () => {
+  historyMode = "chats";
+  historyTabChatsBtn.classList.add("active");
+  historyTabSummariesBtn.classList.remove("active");
+  void loadHistory();
+});
+
 function toggleDrawer(force?: boolean, opts?: { animate?: boolean }) {
   const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
   const animate = opts?.animate !== false && !reducedMotion;
@@ -3994,6 +4722,10 @@ function resetChatState() {
   pendingAgentRequests.clear();
   abortAgentRequested = false;
   lastNavigationMessageUrl = null;
+  loadedChatHistoryKey = null;
+  chatHistoryBannerEl.classList.add("hidden");
+  hideChatSystemPrompt();
+  updateChatPlaceholder();
 }
 
 function finishStreamingMessage() {
@@ -4163,7 +4895,15 @@ refreshBtn.addEventListener("click", () => sendSummarize({ refresh: true }));
 clearBtn.addEventListener("click", () => {
   void clearCurrentView();
 });
-drawerToggleBtn.addEventListener("click", () => toggleDrawer());
+drawerToggleBtn.addEventListener("click", () => {
+  // Close history panel if open
+  if (historyOpen) {
+    historyOpen = false;
+    historyPanelEl.classList.add("hidden");
+    historyToggleBtn.classList.remove("isActive");
+  }
+  toggleDrawer();
+});
 advancedBtn.addEventListener("click", () => {
   void send({ type: "panel:openOptions" });
 });
@@ -4207,6 +4947,7 @@ lineLooseBtn.addEventListener("click", () => bumpLineHeight(LINE_HEIGHT_STEP));
 
 modelPresetEl.addEventListener("change", () => {
   updateModelRowUI();
+  updateModelBadge();
   if (!modelCustomEl.hidden) modelCustomEl.focus();
   void (async () => {
     await patchSettings({ model: readCurrentModelValue() });
@@ -4214,6 +4955,7 @@ modelPresetEl.addEventListener("change", () => {
 });
 
 modelCustomEl.addEventListener("change", () => {
+  updateModelBadge();
   void (async () => {
     await patchSettings({ model: readCurrentModelValue() });
   })();
@@ -4291,6 +5033,7 @@ void (async () => {
   setModelValue(s.model);
   setModelPlaceholderFromDiscovery({});
   updateModelRowUI();
+  updateModelBadge();
   modelRefreshBtn.disabled = !s.token.trim();
   applyTypography(s.fontFamily, s.fontSize, s.lineHeight);
   applyTheme({ scheme: s.colorScheme, mode: s.colorMode });

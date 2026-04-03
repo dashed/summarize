@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
 import http from "node:http";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import type { CacheState } from "../cache.js";
+import { openSqlite } from "../cache.js";
+import type { VideoDetailLevel } from "../prompts/index.js";
 import type { SlideExtractionResult, SlideSettings } from "../slides/index.js";
 import type { DaemonConfig } from "./config.js";
 import { loadSummarizeConfig } from "../config.js";
@@ -15,12 +18,15 @@ import { resolveExecutableInPath } from "../run/env.js";
 import { formatModelLabelForDisplay } from "../run/finish-line.js";
 import { createMediaCacheFromConfig } from "../run/media-cache-state.js";
 import { resolveRunOverrides } from "../run/run-settings.js";
+import { buildHistoryUrlMetadata } from "../shared/history.js";
 import { encodeSseEvent, type SseEvent, type SseSlidesData } from "../shared/sse-events.js";
 import { resolveSlideImagePath, resolveSlideSettings } from "../slides/index.js";
-import { resolvePackageVersion } from "../version.js";
-import { completeAgentResponse, streamAgentResponse } from "./agent.js";
+import { resolveGitSha, resolvePackageVersion } from "../version.js";
+import { completeAgentResponse, getAgentBaseSystemPrompt, streamAgentResponse } from "./agent.js";
 import { type DaemonRequestedMode, resolveAutoDaemonMode } from "./auto-mode.js";
+import { type DiagnosticEvent, type DiagnosticsStore, SEVEN_DAYS_MS, createDiagnosticsStore } from "./diagnostics.js";
 import { DAEMON_HOST, DAEMON_PORT_DEFAULT } from "./constants.js";
+import { buildChatHistoryKey } from "./history.js";
 import { resolveDaemonLogPaths } from "./launchd.js";
 import { buildModelPickerOptions } from "./models.js";
 import {
@@ -142,7 +148,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
     "access-control-allow-headers": "authorization, content-type",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
     // Chrome Private Network Access (PNA): allow requests to localhost from secure contexts.
     // Without this, extensions often fail with a generic "Failed to fetch".
     "access-control-allow-private-network": "true",
@@ -446,7 +452,12 @@ function scheduleSessionCleanup({
 }
 
 export function buildHealthPayload(importMetaUrl?: string) {
-  return { ok: true, pid: process.pid, version: resolvePackageVersion(importMetaUrl) };
+  return {
+    ok: true,
+    pid: process.pid,
+    version: resolvePackageVersion(importMetaUrl),
+    commit: resolveGitSha(importMetaUrl) ?? null,
+  };
 }
 
 export async function runDaemonServer({
@@ -482,6 +493,19 @@ export async function runDaemonServer({
     config: summarizeConfig,
     noMediaCacheFlag: false,
   });
+
+  let diagnosticsStore: DiagnosticsStore | null = null;
+  if (cacheState.path) {
+    try {
+      const diagDb = await openSqlite(cacheState.path);
+      diagDb.exec("PRAGMA journal_mode=WAL");
+      diagDb.exec("PRAGMA synchronous=NORMAL");
+      diagDb.exec("PRAGMA busy_timeout=5000");
+      diagnosticsStore = createDiagnosticsStore(diagDb);
+    } catch {
+      // Diagnostics are best-effort; ignore errors
+    }
+  }
 
   const processRegistry = new ProcessRegistry();
   setProcessObserver(processRegistry.createObserver());
@@ -585,6 +609,85 @@ export async function runDaemonServer({
           },
           cors,
         );
+        return;
+      }
+
+      // ── Diagnostics endpoints ──────────────────────────────────────────
+      if (req.method === "POST" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(req, 512_000);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          json(res, 400, { ok: false, error: message }, cors);
+          return;
+        }
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "invalid json" }, cors);
+          return;
+        }
+        const obj = body as Record<string, unknown>;
+        if (Array.isArray(obj.events)) {
+          const events = obj.events as DiagnosticEvent[];
+          diagnosticsStore.logBatch(events);
+          json(res, 200, { ok: true, count: events.length }, cors);
+        } else if (typeof obj.event === "string" && typeof obj.source === "string") {
+          diagnosticsStore.log(obj as unknown as DiagnosticEvent);
+          json(res, 200, { ok: true, count: 1 }, cors);
+        } else {
+          json(res, 400, { ok: false, error: "missing events array or event+source fields" }, cors);
+        }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        const limit = clampNumber(
+          Number(url.searchParams.get("limit") ?? "100"),
+          1,
+          1000,
+        );
+        const offset = Number(url.searchParams.get("offset") ?? "0") || 0;
+        const event = url.searchParams.get("event") || undefined;
+        const source = url.searchParams.get("source") || undefined;
+        const urlFilter = url.searchParams.get("url") || undefined;
+        const since = url.searchParams.has("since")
+          ? Number(url.searchParams.get("since"))
+          : undefined;
+        const until = url.searchParams.has("until")
+          ? Number(url.searchParams.get("until"))
+          : undefined;
+        const events = diagnosticsStore.query({
+          limit,
+          offset,
+          event,
+          source,
+          url: urlFilter,
+          since,
+          until,
+        });
+        const total = diagnosticsStore.count();
+        json(res, 200, { ok: true, events, total }, cors);
+        return;
+      }
+
+      if (req.method === "DELETE" && pathname === "/v1/diagnostics") {
+        if (!diagnosticsStore) {
+          json(res, 503, { ok: false, error: "Diagnostics not available" }, cors);
+          return;
+        }
+        const olderThanMs = url.searchParams.has("olderThanMs")
+          ? Number(url.searchParams.get("olderThanMs"))
+          : SEVEN_DAYS_MS;
+        const deleted = diagnosticsStore.purge(olderThanMs);
+        json(res, 200, { ok: true, deleted }, cors);
         return;
       }
 
@@ -723,6 +826,14 @@ export async function runDaemonServer({
         const formatRaw = typeof obj.format === "string" ? obj.format.trim().toLowerCase() : "";
         const format: "text" | "markdown" =
           formatRaw === "markdown" || formatRaw === "md" ? "markdown" : "text";
+        const videoDetailLevelRaw =
+          typeof obj.videoDetailLevel === "string" ? obj.videoDetailLevel.trim().toLowerCase() : "";
+        const videoDetailLevel: VideoDetailLevel | null =
+          videoDetailLevelRaw === "summary"
+            ? "summary"
+            : videoDetailLevelRaw === "detailed"
+              ? "detailed"
+              : null;
         const overrides = resolveRunOverrides({
           firecrawl: obj.firecrawl,
           markdownMode: obj.markdownMode,
@@ -740,6 +851,7 @@ export async function runDaemonServer({
           magicCliOrder: obj.magicCliOrder,
         });
         const slidesSettings = resolveSlidesSettings({ env, request: obj });
+        const cookiesRaw = typeof obj.cookies === "string" ? obj.cookies : null;
         const diagnostics = parseDiagnostics(obj.diagnostics);
         const includeContentLog = daemonLogger.enabled && diagnostics.includeContent;
         const hasText = Boolean(textContent.trim());
@@ -752,9 +864,14 @@ export async function runDaemonServer({
             json(res, 400, { ok: false, error: "extractOnly requires mode=url" }, cors);
             return;
           }
+          let cookiesFilePath: string | null = null;
           try {
+            if (cookiesRaw) {
+              cookiesFilePath = path.join(tmpdir(), `summarize-cookies-${randomUUID()}.txt`);
+              await fs.writeFile(cookiesFilePath, cookiesRaw, "utf8");
+            }
             const requestCache: CacheState = noCache
-              ? { ...cacheState, mode: "bypass" as const, store: null }
+              ? { ...cacheState, mode: "bypass" as const }
               : cacheState;
             const runId = randomUUID();
             const { extracted, slides } = await runWithProcessContext(
@@ -769,6 +886,7 @@ export async function runDaemonServer({
                   overrides,
                   format,
                   slides: slidesSettings,
+                  ytDlpCookiesFile: cookiesFilePath,
                 }),
             );
             const slidesPayload =
@@ -815,6 +933,10 @@ export async function runDaemonServer({
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             json(res, 500, { ok: false, error: message }, cors);
+          } finally {
+            if (cookiesFilePath) {
+              fs.unlink(cookiesFilePath).catch(() => {});
+            }
           }
           return;
         }
@@ -873,6 +995,7 @@ export async function runDaemonServer({
         json(res, 200, { ok: true, id: session.id }, cors);
 
         void runWithProcessContext({ runId: session.id, source: "summarize" }, async () => {
+          let cookiesFilePath: string | null = null;
           const slideLogState: {
             startedAt: number | null;
             requested: boolean;
@@ -895,6 +1018,10 @@ export async function runDaemonServer({
             warnings: [],
           };
           try {
+            if (cookiesRaw) {
+              cookiesFilePath = path.join(tmpdir(), `summarize-cookies-${randomUUID()}.txt`);
+              await fs.writeFile(cookiesFilePath, cookiesRaw, "utf8");
+            }
             let emittedOutput = false;
             const sink = {
               writeChunk: (chunk: string) => {
@@ -947,7 +1074,7 @@ export async function runDaemonServer({
               modelOverride && modelOverride.toLowerCase() !== "auto" ? modelOverride : null;
 
             const requestCache: CacheState = noCache
-              ? { ...cacheState, mode: "bypass" as const, store: null }
+              ? { ...cacheState, mode: "bypass" as const }
               : cacheState;
             let liveSlides: SlideExtractionResult | null = null;
 
@@ -981,6 +1108,8 @@ export async function runDaemonServer({
                     mediaCache,
                     overrides,
                     slides: slidesSettings,
+                    ytDlpCookiesFile: cookiesFilePath,
+                    videoDetailLevel,
                     hooks: {
                       ...(includeContentLog
                         ? {
@@ -1117,6 +1246,7 @@ export async function runDaemonServer({
                     cache: requestCache,
                     mediaCache,
                     overrides,
+                    videoDetailLevel,
                   });
             };
 
@@ -1229,6 +1359,9 @@ export async function runDaemonServer({
                 : {}),
             });
           } finally {
+            if (cookiesFilePath) {
+              fs.unlink(cookiesFilePath).catch(() => {});
+            }
             scheduleSessionCleanup({ session, sessions });
           }
         });
@@ -1310,6 +1443,14 @@ export async function runDaemonServer({
         };
 
         try {
+          // Emit the base system prompt so the panel can show it in the chat UI.
+          const pcStr = typeof pageContent === "string" ? pageContent : "";
+          const hasTs = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pcStr);
+          writeEvent({
+            event: "systemPrompt",
+            data: { systemPrompt: getAgentBaseSystemPrompt(automationEnabled, hasTs) },
+          });
+
           await runWithProcessContext({ runId, source: "agent" }, async () =>
             streamAgentResponse({
               env,
@@ -1607,6 +1748,198 @@ export async function runDaemonServer({
           clearInterval(keepalive);
           session.clients.delete(res);
         });
+        return;
+      }
+
+      // ── History & chat persistence endpoints ──────────────────────────
+
+      if (req.method === "GET" && pathname === "/v1/history/summaries") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
+        const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const filterUrl = url.searchParams.get("url") ?? undefined;
+        const filterMode = url.searchParams.get("match") === "canonical" ? "canonical" : "prefix";
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, summaries: [] }, cors);
+          return;
+        }
+        const entries = store.listEntries("summary", { limit, offset, filterUrl, filterMode });
+        json(res, 200, { ok: true, summaries: entries }, cors);
+        return;
+      }
+
+      const summaryKeyMatch = pathname.match(/^\/v1\/history\/summaries\/(.+)$/);
+      if (req.method === "GET" && summaryKeyMatch) {
+        const key = decodeURIComponent(summaryKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const entry = store.getEntryWithMeta("summary", key);
+        if (!entry) {
+          json(res, 404, { ok: false, error: "Summary not found" }, cors);
+          return;
+        }
+        json(res, 200, { ok: true, ...entry }, cors);
+        return;
+      }
+      if (req.method === "DELETE" && summaryKeyMatch) {
+        const key = decodeURIComponent(summaryKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const deleted = store.deleteEntry("summary", key);
+        json(res, deleted ? 200 : 404, { ok: deleted }, cors);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/agent/history") {
+        const body = await readJsonBody(req, 1_000_000);
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "Invalid body" }, cors);
+          return;
+        }
+        const {
+          url: bodyUrl,
+          automationEnabled,
+          pageContent,
+          cacheContent,
+        } = body as Record<string, unknown>;
+        if (!bodyUrl) {
+          json(res, 400, { ok: false, error: "Missing url" }, cors);
+          return;
+        }
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, messages: [] }, cors);
+          return;
+        }
+        const key = buildChatHistoryKey({
+          url: String(bodyUrl),
+          automationEnabled: !!automationEnabled,
+          pageContent: typeof pageContent === "string" ? pageContent : null,
+          cacheContent: typeof cacheContent === "string" ? cacheContent : null,
+        });
+        let messages = store.getJson<unknown[]>("chat", key);
+        // Fallback: if the content-aware key misses (e.g. after extension reload
+        // when re-extraction produces different text), look up by URL via the
+        // cache index which stores all chat entries with URL metadata.
+        if (!messages?.length) {
+          const entries = store.listEntries("chat", {
+            filterUrl: String(bodyUrl),
+            filterMode: "canonical",
+            limit: 1,
+          });
+          if (entries.length > 0) {
+            const entry = store.getEntryWithMeta("chat", entries[0].key);
+            if (entry?.value) {
+              try {
+                messages = JSON.parse(entry.value) as unknown[];
+              } catch {
+                // ignore parse errors
+              }
+            }
+          }
+        }
+        json(res, 200, { ok: true, messages: messages ?? [] }, cors);
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/v1/agent/history/save") {
+        const body = await readJsonBody(req, 2_000_000);
+        if (!body || typeof body !== "object") {
+          json(res, 400, { ok: false, error: "Invalid body" }, cors);
+          return;
+        }
+        const {
+          url: bodyUrl,
+          title,
+          automationEnabled,
+          pageContent,
+          cacheContent,
+          messages,
+          model,
+        } = body as Record<string, unknown>;
+        if (!bodyUrl || !Array.isArray(messages)) {
+          json(res, 400, { ok: false, error: "Missing url or messages" }, cors);
+          return;
+        }
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const key = buildChatHistoryKey({
+          url: String(bodyUrl),
+          automationEnabled: !!automationEnabled,
+          pageContent: typeof pageContent === "string" ? pageContent : null,
+          cacheContent: typeof cacheContent === "string" ? cacheContent : null,
+        });
+        const lastUserMsg = [...messages].reverse().find(
+          (m: Record<string, unknown>) => m.role === "user" && typeof m.content === "string",
+        );
+        const preview = typeof lastUserMsg?.content === "string"
+          ? (lastUserMsg.content as string).slice(0, 120)
+          : null;
+        const pcStr = typeof pageContent === "string" ? pageContent : "";
+        const hasTimestamps = /\[\d{1,2}:\d{2}(?::\d{2})?\]/.test(pcStr);
+        const metadata = {
+          url: String(bodyUrl),
+          historyUrl: buildHistoryUrlMetadata(String(bodyUrl)),
+          title: title ?? null,
+          model: model ?? null,
+          messageCount: messages.length,
+          preview,
+          systemPrompt: getAgentBaseSystemPrompt(!!automationEnabled, hasTimestamps),
+        };
+        store.setJson("chat", key, messages, cacheState.ttlMs, metadata);
+        json(res, 200, { ok: true }, cors);
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/v1/history/chats") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50"), 200);
+        const offset = parseInt(url.searchParams.get("offset") ?? "0");
+        const filterUrl = url.searchParams.get("url") ?? undefined;
+        const filterMode = url.searchParams.get("match") === "canonical" ? "canonical" : "prefix";
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 200, { ok: true, chats: [] }, cors);
+          return;
+        }
+        const entries = store.listEntries("chat", { limit, offset, filterUrl, filterMode });
+        json(res, 200, { ok: true, chats: entries }, cors);
+        return;
+      }
+
+      const chatKeyMatch = pathname.match(/^\/v1\/history\/chats\/(.+)$/);
+      if (req.method === "GET" && chatKeyMatch) {
+        const key = decodeURIComponent(chatKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const entry = store.getEntryWithMeta("chat", key);
+        if (!entry) {
+          json(res, 404, { ok: false, error: "Chat not found" }, cors);
+          return;
+        }
+        json(res, 200, { ok: true, ...entry }, cors);
+        return;
+      }
+      if (req.method === "DELETE" && chatKeyMatch) {
+        const key = decodeURIComponent(chatKeyMatch[1]);
+        const store = cacheState.store;
+        if (!store) {
+          json(res, 404, { ok: false, error: "Cache not available" }, cors);
+          return;
+        }
+        const deleted = store.deleteEntry("chat", key);
+        json(res, deleted ? 200 : 404, { ok: deleted }, cors);
         return;
       }
 

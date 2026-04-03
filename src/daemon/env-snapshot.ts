@@ -29,6 +29,8 @@ const ENV_KEYS = [
   "FAL_KEY",
   "GROQ_API_KEY",
   "SUMMARIZE_MODEL",
+  "SUMMARIZE_SLIDES_MULTIMODAL",
+  "SUMMARIZE_SLIDES_VIDEO",
   "SUMMARIZE_TRANSCRIBER",
   "SUMMARIZE_ONNX_PARAKEET_CMD",
   "SUMMARIZE_ONNX_CANARY_CMD",
@@ -37,6 +39,7 @@ const ENV_KEYS = [
   "GEMINI_PATH",
   "AGENT_PATH",
   "UVX_PATH",
+  "SUMMARIZE_DEBUG_DUMP",
 ] as const;
 
 export type EnvSnapshot = Partial<Record<(typeof ENV_KEYS)[number], string>>;

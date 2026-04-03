@@ -43,7 +43,8 @@ export const SUMMARY_LENGTH_SPECS: Record<SummaryLength, SummaryLengthSpec> = {
   xl: {
     guidance:
       "Write a detailed summary that captures the main points, supporting facts, and concrete numbers or quotes when present.",
-    formatting: "Use 2-5 short paragraphs. Aim for 2-4 sentences per paragraph.",
+    formatting:
+      "Organize content under Markdown headings into distinct sections. Use paragraphs and bullet points freely within sections to cover the material thoroughly.",
     targetCharacters: 9000,
     minCharacters: 6000,
     maxCharacters: 14000,
@@ -51,8 +52,9 @@ export const SUMMARY_LENGTH_SPECS: Record<SummaryLength, SummaryLengthSpec> = {
   },
   xxl: {
     guidance:
-      "Write a comprehensive summary that covers background, main points, evidence, and stated outcomes in the source text; avoid adding implications or recommendations unless explicitly stated.",
-    formatting: "Use 3-7 short paragraphs. Aim for 2-4 sentences per paragraph.",
+      "Write a comprehensive, in-depth summary that covers background, main points, evidence, and stated outcomes in the source text; avoid adding implications or recommendations unless explicitly stated. Use the full available length.",
+    formatting:
+      "Organize content under Markdown headings into clearly separated sections. Use paragraphs and bullet points freely within sections. Aim for thorough, detailed coverage rather than brevity.",
     targetCharacters: 17000,
     minCharacters: 14000,
     maxCharacters: 22000,

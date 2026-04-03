@@ -8,24 +8,55 @@
   </head>
   <body>
     <header>
-      <div class="headerRow">
+      <div class="headerRow headerRow--top">
         <div class="brand">
           <div id="title" class="title">Summarize</div>
-          <div id="subtitle" class="subtitle"></div>
+          <div class="subtitleRow">
+            <div id="subtitle" class="subtitle"></div>
+            <span id="modelBadge" class="modelBadge"></span>
+            <span id="elapsed" class="elapsed"></span>
+          </div>
         </div>
+      </div>
+      <div class="headerRow headerRow--controls">
         <div class="controls">
           <div id="summarizeControlRoot" class="summarizeControlRoot"></div>
+          <div id="lengthRoot"></div>
+          <button
+            id="refresh"
+            type="button"
+            class="ghost icon"
+            aria-label="Refresh"
+            title="Refresh (Shift+Enter)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M17.65 6.35A7.96 7.96 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+              />
+            </svg>
+            <span class="btnLabel">Refresh</span>
+          </button>
+          <button id="historyToggle" type="button" class="ghost icon" aria-label="History">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"
+              />
+            </svg>
+            <span class="btnLabel">History</span>
+          </button>
           <button id="drawerToggle" type="button" class="ghost icon" aria-label="Settings">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
                 d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.18 7.18 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 1h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 7.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.51.4 1.05.71 1.63.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.58-.23 1.12-.54 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"
               />
             </svg>
+            <span class="btnLabel">Settings</span>
           </button>
         </div>
       </div>
       <div id="progress" class="progress" aria-hidden="true">
         <div id="progressFill" class="progressFill"></div>
+        <span id="progressLabel" class="progressLabel"></span>
       </div>
       <div id="slideNotice" class="slideNotice hidden" role="status" aria-live="polite">
         <span id="slideNoticeMessage" class="slideNotice__message"></span>
@@ -48,7 +79,6 @@
     <section id="drawer" class="drawer hidden" aria-label="Controls">
       <div class="drawerGrid">
         <div id="pickersRoot"></div>
-        <div id="lengthRoot"></div>
         <div class="size">
           <span>Size</span>
           <div class="sizeControl" role="group" aria-label="Text size">
@@ -135,9 +165,6 @@
           <div class="drawerAdvancedRow">
             <div id="autoToggle" class="toggleRow"></div>
             <div class="drawerActions drawerAdvancedActions">
-              <button id="refresh" type="button" class="ghost" title="Refresh (Shift+Enter)">
-                Refresh
-              </button>
               <button id="clear" type="button" class="ghost" title="Clear summary + chat">
                 Clear
               </button>
@@ -148,9 +175,42 @@
       </details>
     </section>
 
+    <section id="historyPanel" class="historyPanel hidden" aria-label="History">
+      <div class="historyHeader">
+        <div class="historyHeader__left">
+          <h3 class="historyTitle">History</h3>
+          <span id="historySubtitle" class="historySubtitle"></span>
+        </div>
+        <div class="historyHeader__right">
+          <div class="historyTabs">
+            <button id="historyTabSummaries" type="button" class="ghost small historyTab active">
+              Summaries
+            </button>
+            <button id="historyTabChats" type="button" class="ghost small historyTab">Chats</button>
+          </div>
+          <button id="historyClose" type="button" class="ghost icon historyCloseBtn" aria-label="Close history">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="historyList" class="historyList"></div>
+      <div id="historyEmpty" class="historyEmpty hidden">No history yet</div>
+    </section>
+
     <main>
       <div id="setup" class="setup hidden"></div>
+      <div id="summaryHistoryBanner" class="summaryHistoryBanner hidden" role="status">
+        <span id="summaryHistoryBannerText"></span>
+        <button id="summaryHistoryBannerDismiss" type="button" class="ghost small" aria-label="Return to current summary">Back to current</button>
+      </div>
       <article id="render" class="render"></article>
+      <details id="systemPromptSection" class="systemPromptSection hidden">
+        <summary class="systemPromptToggle">
+          <svg class="systemPromptChevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+          System Prompt
+        </summary>
+        <pre id="systemPromptContent" class="systemPromptContent"></pre>
+      </details>
       <pre id="raw" class="raw hidden"></pre>
 
       <div id="metricsHome">
@@ -158,6 +218,17 @@
       </div>
 
       <section id="chatContainer" class="chatContainer">
+        <div id="chatHistoryBanner" class="chatHistoryBanner hidden" role="status">
+          <span id="chatHistoryBannerText"></span>
+          <button id="chatHistoryBannerDismiss" type="button" class="ghost small" aria-label="Return to current chat">Back to current</button>
+        </div>
+        <details id="chatSystemPromptSection" class="systemPromptSection hidden">
+          <summary class="systemPromptToggle">
+            <svg class="systemPromptChevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+            Chat System Prompt
+          </summary>
+          <pre id="chatSystemPromptContent" class="systemPromptContent"></pre>
+        </details>
         <div id="chatMessages" class="chatMessages isHidden"></div>
         <div id="chatContextStatus" class="chatContextStatus isHidden"></div>
         <div id="automationNotice" class="automationNotice hidden" role="status" aria-live="polite">
@@ -209,6 +280,11 @@
         </button>
       </div>
     </div>
+
+    <footer id="statusBar" class="statusBar">
+      <span class="statusBar__dot" aria-hidden="true"></span>
+      <span id="statusBarText" class="statusBar__text"></span>
+    </footer>
 
     <script type="module" src="./main.ts"></script>
   </body>

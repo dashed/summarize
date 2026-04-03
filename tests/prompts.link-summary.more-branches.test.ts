@@ -58,7 +58,7 @@ describe("prompts/link-summary - more branches", () => {
     expect(prompt).toContain("Note: Content truncated");
     expect(prompt).toContain("12,345");
     expect(prompt).toContain("Write the answer in German.");
-    expect(prompt).toContain("online videos");
+    expect(prompt).toContain("convert video content into detailed");
   });
 
   it("builds prompts without shares and without truncation", () => {

@@ -6,7 +6,8 @@ type AgentJsonResponse = { ok?: boolean; assistant?: AssistantMessage; error?: s
 
 export type AgentStreamEvent =
   | { type: "chunk"; text: string }
-  | { type: "assistant"; assistant: AssistantMessage };
+  | { type: "assistant"; assistant: AssistantMessage }
+  | { type: "systemPrompt"; systemPrompt: string };
 
 export async function* readAgentResponse(res: Response): AsyncGenerator<AgentStreamEvent> {
   const contentType = res.headers.get("content-type") ?? "";
@@ -30,6 +31,8 @@ export async function* readAgentResponse(res: Response): AsyncGenerator<AgentStr
       yield { type: "chunk", text: event.data.text };
     } else if (event.event === "assistant") {
       yield { type: "assistant", assistant: event.data };
+    } else if (event.event === "systemPrompt") {
+      yield { type: "systemPrompt", systemPrompt: event.data.systemPrompt };
     } else if (event.event === "error") {
       throw new Error(event.data.message);
     }
